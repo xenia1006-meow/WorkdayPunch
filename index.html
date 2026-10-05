@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>上班打卡</title>
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="打卡">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --primary: #2563eb;
+    --primary-dark: #1d4ed8;
+    --danger: #dc2626;
+    --ok: #16a34a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --line: #334155;
+      --primary: #3b82f6;
+      --primary-dark: #2563eb;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    padding: env(safe-area-inset-top) 16px calc(24px + env(safe-area-inset-bottom));
+    max-width: 520px; margin: 0 auto;
+  }
+  header { text-align: center; padding: 20px 0 4px; }
+  #today { font-size: 15px; color: var(--muted); }
+  #clock { font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 1px; }
+
+  .punch-wrap { display: flex; flex-direction: column; align-items: center; padding: 20px 0 12px; }
+  #punch {
+    width: 200px; height: 200px; border-radius: 50%;
+    border: none; background: var(--primary); color: #fff;
+    font-size: 28px; font-weight: 700; letter-spacing: 2px;
+    box-shadow: 0 10px 30px rgba(37, 99, 235, .35);
+    cursor: pointer; transition: transform .1s, background .2s;
+    font-family: inherit;
+  }
+  #punch:active { transform: scale(.95); background: var(--primary-dark); }
+  #punch.done { background: var(--ok); box-shadow: 0 10px 30px rgba(22, 163, 74, .35); }
+  #status { margin-top: 14px; min-height: 22px; font-size: 16px; color: var(--muted); text-align: center; }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0 20px; }
+  .stat { background: var(--card); border-radius: 14px; padding: 14px; text-align: center; }
+  .stat .label { font-size: 14px; color: var(--muted); }
+  .stat .value { font-size: 30px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .stat .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  h2 { font-size: 17px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: baseline; }
+  h2 small { font-weight: normal; color: var(--muted); font-size: 13px; }
+  .list { background: var(--card); border-radius: 14px; overflow: hidden; }
+  .row { display: flex; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: none; }
+  .row .date { flex: 1; }
+  .row .date .wd { color: var(--muted); font-size: 13px; margin-left: 6px; }
+  .row .time { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .row .extra { font-size: 12px; color: var(--muted); margin-left: 8px; }
+  .row .del {
+    margin-left: 10px; border: none; background: none; color: var(--muted);
+    font-size: 20px; width: 36px; height: 36px; border-radius: 8px; cursor: pointer;
+  }
+  .row .del:active { background: var(--line); color: var(--danger); }
+  .empty { padding: 28px; text-align: center; color: var(--muted); }
+
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
+  .btn {
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+    font-size: 16px; padding: 14px; border-radius: 12px; cursor: pointer; font-family: inherit;
+  }
+  .btn:active { background: var(--line); }
+  .note { font-size: 12px; color: var(--muted); text-align: center; margin-top: 14px; line-height: 1.6; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: calc(30px + env(safe-area-inset-bottom));
+    transform: translateX(-50%) translateY(20px); opacity: 0;
+    background: rgba(17, 24, 39, .92); color: #fff; padding: 12px 20px; border-radius: 999px;
+    font-size: 15px; transition: all .25s; pointer-events: none; white-space: nowrap;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  #leaveBtn {
+    margin-top: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text);
+    font-size: 15px; padding: 10px 22px; border-radius: 999px; cursor: pointer; font-family: inherit;
+  }
+  #leaveBtn:active { background: var(--line); }
+  .tag {
+    font-size: 14px; font-weight: 600; color: #b45309; background: #fef3c7;
+    padding: 4px 10px; border-radius: 999px;
+  }
+  @media (prefers-color-scheme: dark) { .tag { color: #fcd34d; background: #422006; } }
+  .row.leave .date { color: var(--muted); }
+
+  dialog {
+    border: none; border-radius: 18px; padding: 20px; width: min(340px, calc(100vw - 32px));
+    background: var(--card); color: var(--text);
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, .45); }
+  dialog h3 { margin: 0 0 16px; font-size: 19px; text-align: center; }
+  dialog input[type=date] {
+    display: block; width: 100%; margin-top: 6px; font-size: 17px; padding: 10px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font-family: inherit;
+  }
+  .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0 8px; }
+  .seg input { display: none; }
+  .seg span {
+    display: block; text-align: center; padding: 12px 0; font-size: 16px; border-radius: 10px;
+    border: 1px solid var(--line); cursor: pointer;
+  }
+  .seg input:checked + span { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .hint { font-size: 13px; color: var(--muted); margin: 8px 0 16px; line-height: 1.5; }
+  .dlg-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+</style>
+</head>
+<body>
+  <header>
+    <div id="today"></div>
+    <div id="clock">--:--:--</div>
+  </header>
+
+  <div class="punch-wrap">
+    <button id="punch" type="button">到達公司</button>
+    <div id="status"></div>
+    <button id="leaveBtn" type="button">請假登記</button>
+  </div>
+
+  <dialog id="leaveDlg">
+    <form method="dialog">
+      <h3>請假登記</h3>
+      <label>日期<input type="date" id="leaveDate" required></label>
+      <div class="seg">
+        <label><input type="radio" name="lt" value="full" checked><span>全天</span></label>
+        <label><input type="radio" name="lt" value="am"><span>上午</span></label>
+        <label><input type="radio" name="lt" value="pm"><span>下午</span></label>
+      </div>
+      <p class="hint">全天或上午請假的日子，不列入平均到達時間。<br>同一天重複登記會覆蓋原本的假別。</p>
+      <div class="dlg-actions">
+        <button class="btn" value="cancel" formnovalidate>取消</button>
+        <button class="btn primary" value="ok" autofocus>確定</button>
+      </div>
+    </form>
+  </dialog>
+
+  <section class="stats">
+    <div class="stat">
+      <div class="label">本週平均</div>
+      <div class="value" id="avgWeek">--:--</div>
+      <div class="sub" id="cntWeek"></div>
+    </div>
+    <div class="stat">
+      <div class="label">本月平均</div>
+      <div class="value" id="avgMonth">--:--</div>
+      <div class="sub" id="cntMonth"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>最近 30 天紀錄 <small id="cnt30"></small></h2>
+    <div class="list" id="list"></div>
+  </section>
+
+  <div class="actions">
+    <button class="btn" id="exportBtn" type="button">匯出 CSV</button>
+    <button class="btn" id="importBtn" type="button">匯入 CSV</button>
+  </div>
+  <input type="file" id="importFile" accept=".csv,text/csv" hidden>
+  <p class="note">資料只存在這支手機的瀏覽器中。<br>清除瀏覽器資料會一併刪除，請定期匯出備份。</p>
+
+  <div id="toast"></div>
+
+<script>
+(function () {
+  const KEY = 'punch-records-v1';
+  const WD = ['日', '一', '二', '三', '四', '五', '六'];
+  const $ = (id) => document.getElementById(id);
+  const pad = (n) => String(n).padStart(2, '0');
+
+  // 每筆紀錄為 ISO 時間字串
+  function load() {
+    try {
+      const arr = JSON.parse(localStorage.getItem(KEY) || '[]');
+      return Array.isArray(arr) ? arr.filter((s) => !isNaN(new Date(s))) : [];
+    } catch (e) { return []; }
+  }
+  function save(arr) {
+    arr.sort();
+    localStorage.setItem(KEY, JSON.stringify(arr));
+  }
+
+  // 請假紀錄：{ 'YYYY-MM-DD': 'full' | 'am' | 'pm' }
+  const LEAVE_KEY = 'punch-leaves-v1';
+  const LEAVE_LABEL = { full: '全天', am: '上午', pm: '下午' };
+  function loadLeaves() {
+    try {
+      const obj = JSON.parse(localStorage.getItem(LEAVE_KEY) || '{}');
+      return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+    } catch (e) { return {}; }
+  }
+  function saveLeaves(obj) {
+    localStorage.setItem(LEAVE_KEY, JSON.stringify(obj));
+  }
+  // 全天或上午請假，當天到達時間不算進平均
+  const skipsAvg = (type) => type === 'full' || type === 'am';
+
+  const dateKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const hms = (d) => `${hm(d)}:${pad(d.getSeconds())}`;
+  const minsToHM = (m) => `${pad(Math.floor(m / 60))}:${pad(Math.round(m % 60) === 60 ? 59 : Math.round(m % 60))}`;
+
+  // 每天只取最早的一筆當作「到達時間」
+  function firstPerDay(records) {
+    const map = new Map();
+    for (const s of records) {
+      const d = new Date(s);
+      const k = dateKey(d);
+      if (!map.has(k) || d < map.get(k)) map.set(k, d);
+    }
+    return map;
+  }
+
+  // 統計 [start, end) 區間：到達平均（排除全天/上午請假）與請假天數
+  function stats(days, leaves, start, end) {
+    const from = dateKey(start), to = dateKey(end);
+    const list = [...days.entries()]
+      .filter(([k]) => k >= from && k < to && !skipsAvg(leaves[k]))
+      .map(([, d]) => d);
+    const leaveDays = Object.entries(leaves)
+      .filter(([k]) => k >= from && k < to)
+      .reduce((n, [, t]) => n + (t === 'full' ? 1 : 0.5), 0);
+    const total = list.reduce((sum, d) => sum + d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60, 0);
+    return { avg: list.length ? total / list.length : null, count: list.length, leaveDays };
+  }
+
+  function showStats(avgId, cntId, s) {
+    $(avgId).textContent = s.avg == null ? '--:--' : minsToHM(s.avg);
+    const parts = [];
+    if (s.count) parts.push(`共 ${s.count} 天`);
+    if (s.leaveDays) parts.push(`請假 ${s.leaveDays} 天`);
+    $(cntId).textContent = parts.length ? parts.join('・') : '尚無紀錄';
+  }
+
+  function render() {
+    const records = load();
+    const leaves = loadLeaves();
+    const days = firstPerDay(records);
+    const now = new Date();
+
+    // 本週（週一開始）與本月
+    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+    const weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 7);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    showStats('avgWeek', 'cntWeek', stats(days, leaves, weekStart, weekEnd));
+    showStats('avgMonth', 'cntMonth', stats(days, leaves, monthStart, monthEnd));
+
+    // 今日狀態
+    const todayKey = dateKey(now);
+    const todayFirst = days.get(todayKey);
+    const todayLeave = leaves[todayKey];
+    $('punch').classList.toggle('done', !!todayFirst);
+    let status = todayFirst ? `今天 ${hm(todayFirst)} 已打卡 ✓` : '今天尚未打卡';
+    if (todayLeave === 'full' && !todayFirst) status = '今天請假（全天）';
+    else if (todayLeave) status += `（${LEAVE_LABEL[todayLeave]}請假）`;
+    $('status').textContent = status;
+
+    // 最近 30 天：打卡與請假合併，依日期新到舊（同一天請假列在打卡上方）
+    const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
+    const cutoffKey = dateKey(cutoff);
+    const items = [];
+    for (const s of records) {
+      const d = new Date(s);
+      if (d >= cutoff) items.push({ sort: `${dateKey(d)} ${hms(d)}`, punch: s, d });
+    }
+    for (const [k, t] of Object.entries(leaves)) {
+      if (k >= cutoffKey) items.push({ sort: `${k} 99`, leave: k, type: t });
+    }
+    items.sort((a, b) => (a.sort < b.sort ? 1 : -1));
+
+    const nPunch = items.filter((i) => i.punch).length;
+    const nLeave = items.length - nPunch;
+    $('cnt30').textContent = [nPunch && `打卡 ${nPunch} 筆`, nLeave && `請假 ${nLeave} 筆`].filter(Boolean).join('・');
+    const list = $('list');
+    list.innerHTML = '';
+    if (!items.length) {
+      list.innerHTML = '<div class="empty">還沒有打卡紀錄</div>';
+      return;
+    }
+    for (const item of items) {
+      const row = document.createElement('div');
+      let onDelete;
+      if (item.leave) {
+        const d = new Date(item.leave + 'T00:00');
+        row.className = 'row leave';
+        row.innerHTML =
+          `<div class="date">${d.getMonth() + 1}/${d.getDate()}<span class="wd">週${WD[d.getDay()]}</span></div>` +
+          `<span class="tag">請假・${LEAVE_LABEL[item.type]}</span>`;
+        onDelete = () => {
+          if (!confirm(`確定刪除 ${item.leave} 的請假紀錄？`)) return false;
+          const lv = loadLeaves();
+          delete lv[item.leave];
+          saveLeaves(lv);
+          return true;
+        };
+      } else {
+        const d = item.d;
+        const k = dateKey(d);
+        const isFirst = days.get(k).getTime() === d.getTime();
+        const note = !isFirst ? '補打' : skipsAvg(leaves[k]) ? '不計平均' : '';
+        row.className = 'row';
+        row.innerHTML =
+          `<div class="date">${d.getMonth() + 1}/${d.getDate()}<span class="wd">週${WD[d.getDay()]}</span></div>` +
+          `<div class="time">${hm(d)}</div>` +
+          (note ? `<span class="extra">${note}</span>` : '');
+        onDelete = () => {
+          if (!confirm(`確定刪除 ${k} ${hm(d)} 這筆紀錄？`)) return false;
+          save(load().filter((x) => x !== item.punch));
+          return true;
+        };
+      }
+      const del = document.createElement('button');
+      del.className = 'del';
+      del.type = 'button';
+      del.setAttribute('aria-label', '刪除');
+      del.textContent = '×';
+      del.addEventListener('click', () => {
+        if (onDelete()) { render(); toast('已刪除'); }
+      });
+      row.appendChild(del);
+      list.appendChild(row);
+    }
+  }
+
+  let toastTimer;
+  function toast(msg) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+  }
+
+  $('punch').addEventListener('click', () => {
+    const now = new Date();
+    const k = dateKey(now);
+    const records = load();
+    const leaves = loadLeaves();
+    const todayFirst = firstPerDay(records).get(k);
+    if (leaves[k] === 'full') {
+      if (!confirm('今天登記了全天請假，要改成「上午請假」並打卡嗎？')) return;
+      leaves[k] = 'am';
+      saveLeaves(leaves);
+    } else if (todayFirst && !confirm(`今天 ${hm(todayFirst)} 已經打過卡了，還要再記錄一次嗎？`)) return;
+    records.push(now.toISOString());
+    save(records);
+    if (navigator.vibrate) navigator.vibrate(60);
+    render();
+    toast(`打卡成功 ${hms(now)}`);
+  });
+
+  // 請假登記
+  const dlg = $('leaveDlg');
+  const setType = (t) => { dlg.querySelector(`input[name=lt][value=${t}]`).checked = true; };
+  $('leaveDate').addEventListener('change', (e) => setType(loadLeaves()[e.target.value] || 'full'));
+  $('leaveBtn').addEventListener('click', () => {
+    const k = dateKey(new Date());
+    $('leaveDate').value = k;
+    setType(loadLeaves()[k] || 'full');
+    dlg.showModal();
+  });
+  dlg.addEventListener('close', () => {
+    if (dlg.returnValue !== 'ok') return;
+    const k = $('leaveDate').value;
+    const t = dlg.querySelector('input[name=lt]:checked').value;
+    if (!k) return;
+    const leaves = loadLeaves();
+    leaves[k] = t;
+    saveLeaves(leaves);
+    render();
+    toast(`已登記 ${k.slice(5).replace('-', '/')} ${LEAVE_LABEL[t]}請假`);
+  });
+
+  // 匯出 CSV（含 BOM，Excel 開啟中文不會亂碼）
+  $('exportBtn').addEventListener('click', () => {
+    const records = load();
+    const leaves = loadLeaves();
+    const rows = [];
+    for (const s of records) {
+      const d = new Date(s);
+      rows.push([`${dateKey(d)} ${hms(d)}`, `${dateKey(d)},週${WD[d.getDay()]},${hms(d)},${s},打卡`]);
+    }
+    for (const [k, t] of Object.entries(leaves)) {
+      const d = new Date(k + 'T00:00');
+      rows.push([`${k} 00`, `${k},週${WD[d.getDay()]},,,請假-${LEAVE_LABEL[t]}`]);
+    }
+    if (!rows.length) { toast('沒有資料可匯出'); return; }
+    rows.sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    const lines = ['日期,星期,時間,ISO時間,類型', ...rows.map((r) => r[1])];
+    const name = `打卡紀錄_${dateKey(new Date())}.csv`;
+    const file = new File(['﻿' + lines.join('\r\n')], name, { type: 'text/csv;charset=utf-8' });
+
+    // iPhone 主畫面 App 不支援一般下載，改用分享選單（可存到「檔案」、LINE、Email）
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: name })
+        .then(() => toast(`已匯出 ${rows.length} 筆`))
+        .catch((err) => { if (err.name !== 'AbortError') toast('分享失敗，請再試一次'); });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast(`已匯出 ${rows.length} 筆`);
+  });
+
+  // 匯入 CSV（與現有資料合併，重複的會略過）
+  const LABEL_TO_TYPE = Object.fromEntries(Object.entries(LEAVE_LABEL).map(([t, l]) => [l, t]));
+  $('importBtn').addEventListener('click', () => $('importFile').click());
+  $('importFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const text = (await file.text()).replace(/^﻿/, '');
+    const set = new Set(load());
+    const leaves = loadLeaves();
+    let added = 0, found = 0;
+    for (const line of text.split(/\r?\n/).slice(1)) {
+      const cols = line.split(',').map((c) => c.trim());
+      if (cols.length < 3) continue;
+      const date = cols[0].replace(/\//g, '-');
+      const leaveType = (cols[4] || '').startsWith('請假') && LABEL_TO_TYPE[cols[4].split('-')[1]];
+      if (leaveType) {
+        found++;
+        if (leaves[date] !== leaveType) { leaves[date] = leaveType; added++; }
+        continue;
+      }
+      let d = cols[3] ? new Date(cols[3]) : null;
+      if (!d || isNaN(d)) d = new Date(`${date}T${cols[2]}`);
+      if (isNaN(d)) continue;
+      found++;
+      const s = d.toISOString();
+      if (!set.has(s)) { set.add(s); added++; }
+    }
+    if (!found) { toast('檔案中找不到有效紀錄'); return; }
+    save([...set]);
+    saveLeaves(leaves);
+    render();
+    toast(`匯入完成，新增 ${added} 筆`);
+  });
+
+  function tick() {
+    const now = new Date();
+    $('today').textContent = `${now.getFullYear()} 年 ${now.getMonth() + 1} 月 ${now.getDate()} 日　星期${WD[now.getDay()]}`;
+    $('clock').textContent = hms(now);
+  }
+  let lastDay = dateKey(new Date());
+  setInterval(() => {
+    tick();
+    const k = dateKey(new Date());
+    if (k !== lastDay) { lastDay = k; render(); }
+  }, 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { tick(); render(); } });
+
+  tick();
+  render();
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+})();
+</script>
+</body>
+</html>
