@@ -97,11 +97,12 @@
   }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-  #leaveBtn {
-    margin-top: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text);
+  .sub-btns { display: flex; gap: 10px; margin-top: 12px; }
+  .sub-btns button {
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
     font-size: 15px; padding: 10px 22px; border-radius: 999px; cursor: pointer; font-family: inherit;
   }
-  #leaveBtn:active { background: var(--line); }
+  .sub-btns button:active { background: var(--line); }
   .tag {
     font-size: 14px; font-weight: 600; color: #b45309; background: #fef3c7;
     padding: 4px 10px; border-radius: 999px;
@@ -115,7 +116,7 @@
   }
   dialog::backdrop { background: rgba(0, 0, 0, .45); }
   dialog h3 { margin: 0 0 16px; font-size: 19px; text-align: center; }
-  dialog input[type=date] {
+  dialog input[type=date], dialog input[type=time] {
     display: block; width: 100%; margin-top: 6px; font-size: 17px; padding: 10px;
     border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font-family: inherit;
   }
@@ -129,6 +130,7 @@
   .hint { font-size: 13px; color: var(--muted); margin: 8px 0 16px; line-height: 1.5; }
   .dlg-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  dialog label + label { display: block; margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -140,8 +142,24 @@
   <div class="punch-wrap">
     <button id="punch" type="button">到達公司</button>
     <div id="status"></div>
-    <button id="leaveBtn" type="button">請假登記</button>
+    <div class="sub-btns">
+      <button id="manualBtn" type="button">手動打卡</button>
+      <button id="leaveBtn" type="button">請假登記</button>
+    </div>
   </div>
+
+  <dialog id="manualDlg">
+    <form method="dialog">
+      <h3>手動打卡</h3>
+      <label>日期<input type="date" id="manualDate" required></label>
+      <label>到達時間<input type="time" id="manualTime" required></label>
+      <p class="hint">忘記打卡時用來補登，列表中會標示「手動」。<br>同一天有多筆時，以最早的時間計算平均。</p>
+      <div class="dlg-actions">
+        <button class="btn" value="cancel" formnovalidate>取消</button>
+        <button class="btn primary" value="ok" autofocus>確定</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="leaveDlg">
     <form method="dialog">
@@ -221,6 +239,18 @@
   // 全天或上午請假，當天到達時間不算進平均
   const skipsAvg = (type) => type === 'full' || type === 'am';
 
+  // 手動補登的打卡（ISO 時間字串），只用來在列表與 CSV 標示
+  const MANUAL_KEY = 'punch-manual-v1';
+  function loadManual() {
+    try {
+      const arr = JSON.parse(localStorage.getItem(MANUAL_KEY) || '[]');
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch (e) { return new Set(); }
+  }
+  function saveManual(set) {
+    localStorage.setItem(MANUAL_KEY, JSON.stringify([...set]));
+  }
+
   const dateKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const hms = (d) => `${hm(d)}:${pad(d.getSeconds())}`;
@@ -261,6 +291,7 @@
   function render() {
     const records = load();
     const leaves = loadLeaves();
+    const manual = loadManual();
     const days = firstPerDay(records);
     const now = new Date();
 
@@ -325,7 +356,8 @@
         const d = item.d;
         const k = dateKey(d);
         const isFirst = days.get(k).getTime() === d.getTime();
-        const note = !isFirst ? '補打' : skipsAvg(leaves[k]) ? '不計平均' : '';
+        const note = [manual.has(item.punch) && '手動', !isFirst ? '重複' : skipsAvg(leaves[k]) && '不計平均']
+          .filter(Boolean).join('・');
         row.className = 'row';
         row.innerHTML =
           `<div class="date">${d.getMonth() + 1}/${d.getDate()}<span class="wd">週${WD[d.getDay()]}</span></div>` +
@@ -334,6 +366,8 @@
         onDelete = () => {
           if (!confirm(`確定刪除 ${k} ${hm(d)} 這筆紀錄？`)) return false;
           save(load().filter((x) => x !== item.punch));
+          const m = loadManual();
+          if (m.delete(item.punch)) saveManual(m);
           return true;
         };
       }
@@ -377,6 +411,41 @@
     toast(`打卡成功 ${hms(now)}`);
   });
 
+  // 手動打卡（忘記打卡時補登）
+  const mdlg = $('manualDlg');
+  $('manualBtn').addEventListener('click', () => {
+    const now = new Date();
+    $('manualDate').value = dateKey(now);
+    $('manualDate').max = dateKey(now);
+    $('manualTime').value = '08:30';
+    mdlg.showModal();
+  });
+  mdlg.addEventListener('close', () => {
+    if (mdlg.returnValue !== 'ok') return;
+    const k = $('manualDate').value;
+    const t = $('manualTime').value;
+    if (!k || !t) return;
+    const d = new Date(`${k}T${t}:00`);
+    if (isNaN(d)) return;
+    if (d > new Date()) { toast('不能登記未來的時間'); return; }
+    const s = d.toISOString();
+    const records = load();
+    if (records.includes(s)) { toast('這筆紀錄已經存在'); return; }
+    const leaves = loadLeaves();
+    if (leaves[k] === 'full') {
+      if (!confirm(`${k} 登記了全天請假，要改成「上午請假」並補登打卡嗎？`)) return;
+      leaves[k] = 'am';
+      saveLeaves(leaves);
+    }
+    records.push(s);
+    save(records);
+    const manual = loadManual();
+    manual.add(s);
+    saveManual(manual);
+    render();
+    toast(`已補登 ${k.slice(5).replace('-', '/')} ${t}`);
+  });
+
   // 請假登記
   const dlg = $('leaveDlg');
   const setType = (t) => { dlg.querySelector(`input[name=lt][value=${t}]`).checked = true; };
@@ -403,10 +472,12 @@
   $('exportBtn').addEventListener('click', () => {
     const records = load();
     const leaves = loadLeaves();
+    const manual = loadManual();
     const rows = [];
     for (const s of records) {
       const d = new Date(s);
-      rows.push([`${dateKey(d)} ${hms(d)}`, `${dateKey(d)},週${WD[d.getDay()]},${hms(d)},${s},打卡`]);
+      const type = manual.has(s) ? '打卡-手動' : '打卡';
+      rows.push([`${dateKey(d)} ${hms(d)}`, `${dateKey(d)},週${WD[d.getDay()]},${hms(d)},${s},${type}`]);
     }
     for (const [k, t] of Object.entries(leaves)) {
       const d = new Date(k + 'T00:00');
@@ -445,6 +516,7 @@
     const text = (await file.text()).replace(/^﻿/, '');
     const set = new Set(load());
     const leaves = loadLeaves();
+    const manual = loadManual();
     let added = 0, found = 0;
     for (const line of text.split(/\r?\n/).slice(1)) {
       const cols = line.split(',').map((c) => c.trim());
@@ -462,10 +534,12 @@
       found++;
       const s = d.toISOString();
       if (!set.has(s)) { set.add(s); added++; }
+      if (cols[4] === '打卡-手動') manual.add(s);
     }
     if (!found) { toast('檔案中找不到有效紀錄'); return; }
     save([...set]);
     saveLeaves(leaves);
+    saveManual(manual);
     render();
     toast(`匯入完成，新增 ${added} 筆`);
   });
