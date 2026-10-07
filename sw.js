@@ -1,5 +1,5 @@
 // 離線快取：更新程式時把版本號 +1
-const CACHE = 'punch-v5';
+const CACHE = 'punch-v6';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
