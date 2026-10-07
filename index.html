@@ -294,7 +294,7 @@
 
   // 遲到規則：lateTime（含）起算遲到，每月 lateLimit 次會收到公司通知
   const SETTINGS_KEY = 'punch-settings-v1';
-  const DEFAULT_SETTINGS = { lateTime: '09:00', lateLimit: 6, workHours: 8, lunchMins: 60 };
+  const DEFAULT_SETTINGS = { lateTime: '09:00', lateLimit: 5, workHours: 8, lunchMins: 60 };
   function loadSettings() {
     try {
       return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
