@@ -64,6 +64,10 @@
   .stat .label { font-size: 14px; color: var(--muted); }
   .stat .value { font-size: 30px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
   .stat .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .stat.wide { grid-column: 1 / -1; }
+  .stat.warn .value { color: #d97706; }
+  .stat.danger { box-shadow: inset 0 0 0 2px var(--danger); }
+  .stat.danger .value, .stat.danger .sub { color: var(--danger); }
 
   h2 { font-size: 17px; margin: 0 0 8px; display: flex; justify-content: space-between; align-items: baseline; }
   h2 small { font-weight: normal; color: var(--muted); font-size: 13px; }
@@ -74,6 +78,11 @@
   .row .date .wd { color: var(--muted); font-size: 13px; margin-left: 6px; }
   .row .time { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .row .extra { font-size: 12px; color: var(--muted); margin-left: 8px; }
+  .row .time.late, .row .extra.late { color: var(--danger); }
+  .link-btn {
+    display: block; margin: 4px auto 0; border: none; background: none; color: var(--muted);
+    font-size: 14px; text-decoration: underline; padding: 8px; cursor: pointer; font-family: inherit;
+  }
   .row .del {
     margin-left: 10px; border: none; background: none; color: var(--muted);
     font-size: 20px; width: 36px; height: 36px; border-radius: 8px; cursor: pointer;
@@ -116,7 +125,7 @@
   }
   dialog::backdrop { background: rgba(0, 0, 0, .45); }
   dialog h3 { margin: 0 0 16px; font-size: 19px; text-align: center; }
-  dialog input[type=date], dialog input[type=time] {
+  dialog input[type=date], dialog input[type=time], dialog input[type=number] {
     display: block; width: 100%; margin-top: 6px; font-size: 17px; padding: 10px;
     border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font-family: inherit;
   }
@@ -189,6 +198,11 @@
       <div class="value" id="avgMonth">--:--</div>
       <div class="sub" id="cntMonth"></div>
     </div>
+    <div class="stat wide" id="lateCard">
+      <div class="label" id="lateLabel">本月遲到</div>
+      <div class="value" id="lateCount">0</div>
+      <div class="sub" id="lateSub"></div>
+    </div>
   </section>
 
   <section>
@@ -202,6 +216,20 @@
   </div>
   <input type="file" id="importFile" accept=".csv,text/csv" hidden>
   <p class="note">資料只存在這支手機的瀏覽器中。<br>清除瀏覽器資料會一併刪除，請定期匯出備份。</p>
+  <button class="link-btn" id="settingsBtn" type="button">設定遲到規則</button>
+
+  <dialog id="settingsDlg">
+    <form method="dialog">
+      <h3>遲到規則</h3>
+      <label>幾點起算遲到（含）<input type="time" id="setLateTime" required></label>
+      <label>每月幾次會收到通知<input type="number" id="setLateLimit" min="1" max="31" inputmode="numeric" required></label>
+      <p class="hint">例如設定 09:00，則 09:00 整就算遲到，08:59 以前準時。<br>全天或上午請假的日子不算遲到。</p>
+      <div class="dlg-actions">
+        <button class="btn" value="cancel" formnovalidate>取消</button>
+        <button class="btn primary" value="ok">儲存</button>
+      </div>
+    </form>
+  </dialog>
 
   <div id="toast"></div>
 
@@ -250,6 +278,22 @@
   function saveManual(set) {
     localStorage.setItem(MANUAL_KEY, JSON.stringify([...set]));
   }
+
+  // 遲到規則：lateTime（含）起算遲到，每月 lateLimit 次會收到公司通知
+  const SETTINGS_KEY = 'punch-settings-v1';
+  const DEFAULT_SETTINGS = { lateTime: '09:00', lateLimit: 6 };
+  function loadSettings() {
+    try {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+    } catch (e) { return { ...DEFAULT_SETTINGS }; }
+  }
+  function saveSettings(cfg) {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(cfg));
+  }
+  // 當天第一筆打卡在設定時間（含）之後算遲到；全天或上午請假不算
+  const isLateDay = (k, first, leaves, cfg) => !!first && !skipsAvg(leaves[k]) && hm(first) >= cfg.lateTime;
+  const monthLates = (days, leaves, cfg, ym) =>
+    [...days.entries()].filter(([k, d]) => k.startsWith(ym) && isLateDay(k, d, leaves, cfg)).length;
 
   const dateKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -304,14 +348,25 @@
     showStats('avgWeek', 'cntWeek', stats(days, leaves, weekStart, weekEnd));
     showStats('avgMonth', 'cntMonth', stats(days, leaves, monthStart, monthEnd));
 
-    // 今日狀態
+    // 本月遲到次數
+    const cfg = loadSettings();
     const todayKey = dateKey(now);
+    const lateN = monthLates(days, leaves, cfg, todayKey.slice(0, 7));
+    const left = cfg.lateLimit - lateN;
+    $('lateLabel').textContent = `本月遲到（${cfg.lateTime} 起算）`;
+    $('lateCount').textContent = `${lateN} / ${cfg.lateLimit} 次`;
+    $('lateSub').textContent = left > 0 ? `再遲到 ${left} 次會收到通知` : '已達通知門檻';
+    $('lateCard').classList.toggle('warn', left > 0 && left <= 2);
+    $('lateCard').classList.toggle('danger', left <= 0);
+
+    // 今日狀態
     const todayFirst = days.get(todayKey);
     const todayLeave = leaves[todayKey];
     $('punch').classList.toggle('done', !!todayFirst);
     let status = todayFirst ? `今天 ${hm(todayFirst)} 已打卡 ✓` : '今天尚未打卡';
     if (todayLeave === 'full' && !todayFirst) status = '今天請假（全天）';
     else if (todayLeave) status += `（${LEAVE_LABEL[todayLeave]}請假）`;
+    if (isLateDay(todayKey, todayFirst, leaves, cfg)) status += '・遲到';
     $('status').textContent = status;
 
     // 最近 30 天：打卡與請假合併，依日期新到舊（同一天請假列在打卡上方）
@@ -356,12 +411,14 @@
         const d = item.d;
         const k = dateKey(d);
         const isFirst = days.get(k).getTime() === d.getTime();
+        const late = isFirst && isLateDay(k, d, leaves, cfg);
         const note = [manual.has(item.punch) && '手動', !isFirst ? '重複' : skipsAvg(leaves[k]) && '不計平均']
           .filter(Boolean).join('・');
         row.className = 'row';
         row.innerHTML =
           `<div class="date">${d.getMonth() + 1}/${d.getDate()}<span class="wd">週${WD[d.getDay()]}</span></div>` +
-          `<div class="time">${hm(d)}</div>` +
+          `<div class="time${late ? ' late' : ''}">${hm(d)}</div>` +
+          (late ? '<span class="extra late">遲到</span>' : '') +
           (note ? `<span class="extra">${note}</span>` : '');
         onDelete = () => {
           if (!confirm(`確定刪除 ${k} ${hm(d)} 這筆紀錄？`)) return false;
@@ -408,7 +465,31 @@
     save(records);
     if (navigator.vibrate) navigator.vibrate(60);
     render();
-    toast(`打卡成功 ${hms(now)}`);
+    const cfg = loadSettings();
+    if (!todayFirst && isLateDay(k, now, leaves, cfg)) {
+      const n = monthLates(firstPerDay(records), leaves, cfg, k.slice(0, 7));
+      toast(`打卡成功 ${hm(now)}・遲到（本月第 ${n} 次）`);
+    } else {
+      toast(`打卡成功 ${hms(now)}`);
+    }
+  });
+
+  // 遲到規則設定
+  const sdlg = $('settingsDlg');
+  $('settingsBtn').addEventListener('click', () => {
+    const cfg = loadSettings();
+    $('setLateTime').value = cfg.lateTime;
+    $('setLateLimit').value = cfg.lateLimit;
+    sdlg.showModal();
+  });
+  sdlg.addEventListener('close', () => {
+    if (sdlg.returnValue !== 'ok') return;
+    const lateTime = $('setLateTime').value;
+    const lateLimit = parseInt($('setLateLimit').value, 10);
+    if (!lateTime || !(lateLimit > 0)) return;
+    saveSettings({ lateTime, lateLimit });
+    render();
+    toast('已儲存遲到規則');
   });
 
   // 手動打卡（忘記打卡時補登）
