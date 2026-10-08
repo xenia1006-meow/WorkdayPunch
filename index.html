@@ -123,6 +123,51 @@
     padding: 4px 10px; border-radius: 999px;
   }
   @media (prefers-color-scheme: dark) { .tag { color: #fcd34d; background: #422006; } }
+
+  .cal { background: var(--card); border-radius: 14px; padding: 12px; margin-bottom: 20px; }
+  .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .cal-head h2 { margin: 0; font-size: 17px; }
+  .cal-nav {
+    width: 44px; height: 40px; border: none; background: none; color: var(--text);
+    font-size: 26px; border-radius: 10px; cursor: pointer; font-family: inherit;
+  }
+  .cal-nav:active { background: var(--line); }
+  .cal-nav:disabled { opacity: .25; cursor: default; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .cal-wd { text-align: center; font-size: 12px; color: var(--muted); padding: 2px 0 4px; }
+  .cal-day {
+    min-width: 0; height: 52px; border: none; border-radius: 8px; background: var(--bg); color: var(--text);
+    font-family: inherit; padding: 6px 0 0; display: flex; flex-direction: column; align-items: center; gap: 2px;
+    cursor: pointer;
+  }
+  .cal-day .n { font-size: 14px; font-weight: 600; }
+  .cal-day .t { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .cal-day.blank { background: none; cursor: default; }
+  .cal-day.weekend .n { color: var(--muted); }
+  .cal-day.future { opacity: .4; }
+  .cal-day.late { background: #fee2e2; }
+  .cal-day.late .t { color: var(--danger); font-weight: 600; }
+  .cal-day.leave { background: #fef3c7; }
+  .cal-day.leave .t { color: #b45309; }
+  .cal-day.miss { box-shadow: inset 0 0 0 2px #ea580c; }
+  .cal-day.today .n { color: var(--primary); }
+  .cal-day.today { box-shadow: inset 0 0 0 2px var(--primary); }
+  .cal-day.sel { box-shadow: inset 0 0 0 2px var(--text); }
+  @media (prefers-color-scheme: dark) {
+    .cal-day.late { background: #450a0a; }
+    .cal-day.leave { background: #422006; }
+    .cal-day.leave .t { color: #fcd34d; }
+  }
+  .cal-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .lg { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
+  .lg.late { background: #fca5a5; }
+  .lg.leave { background: #fcd34d; }
+  .lg.miss { box-shadow: inset 0 0 0 2px #ea580c; }
+  .cal-sum { text-align: center; font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .cal-detail { margin-top: 10px; padding: 12px 14px; border-radius: 10px; background: var(--bg); font-size: 15px; line-height: 1.7; }
+  .cal-detail b { font-size: 16px; }
+  .cal-detail .late { color: var(--danger); }
+  .cal-detail .btn { display: block; width: 100%; margin-top: 8px; padding: 10px; }
   .row.leave .date { color: var(--muted); }
 
   dialog {
@@ -214,6 +259,22 @@
       <div class="value" id="lateCount">0</div>
       <div class="sub" id="lateSub"></div>
     </div>
+  </section>
+
+  <section class="cal">
+    <div class="cal-head">
+      <button class="cal-nav" id="calPrev" type="button" aria-label="上個月">‹</button>
+      <h2 id="calTitle"></h2>
+      <button class="cal-nav" id="calNext" type="button" aria-label="下個月">›</button>
+    </div>
+    <div class="cal-grid" id="calGrid"></div>
+    <div class="cal-legend">
+      <span><i class="lg late"></i>遲到</span>
+      <span><i class="lg leave"></i>請假</span>
+      <span><i class="lg miss"></i>沒打下班卡</span>
+    </div>
+    <div class="cal-sum" id="calSum"></div>
+    <div class="cal-detail" id="calDetail" hidden></div>
   </section>
 
   <section>
@@ -423,6 +484,8 @@
     }
     $('status').textContent = status;
 
+    renderCalendar({ days, leaves, outs, cfg, todayKey });
+
     // 最近 30 天：打卡與請假合併，依日期新到舊（同一天請假列在打卡上方）
     const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
     const cutoffKey = dateKey(cutoff);
@@ -525,6 +588,113 @@
     }
   }
 
+  // 月曆：calMonth 為顯示月份的 1 號，calSel 為點選的日期
+  let calMonth = null;
+  let calSel = null;
+  let calCtx = null;
+  const LEAVE_SHORT = { full: '請假', am: '上午假', pm: '下午假' };
+
+  function renderCalendar(ctx) {
+    calCtx = ctx;
+    const { days, leaves, outs, cfg, todayKey } = ctx;
+    const now = new Date();
+    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    if (!calMonth) calMonth = thisMonth;
+    const y = calMonth.getFullYear(), mo = calMonth.getMonth();
+    const ym = `${y}-${pad(mo + 1)}`;
+    $('calTitle').textContent = `${y} 年 ${mo + 1} 月`;
+    $('calNext').disabled = calMonth >= thisMonth;
+
+    const grid = $('calGrid');
+    grid.innerHTML = '';
+    for (const w of ['一', '二', '三', '四', '五', '六', '日']) {
+      const el = document.createElement('div');
+      el.className = 'cal-wd';
+      el.textContent = w;
+      grid.appendChild(el);
+    }
+    const lead = (new Date(y, mo, 1).getDay() + 6) % 7;
+    for (let i = 0; i < lead; i++) {
+      const el = document.createElement('div');
+      el.className = 'cal-day blank';
+      grid.appendChild(el);
+    }
+    const nDays = new Date(y, mo + 1, 0).getDate();
+    for (let day = 1; day <= nDays; day++) {
+      const d = new Date(y, mo, day);
+      const k = dateKey(d);
+      const first = days.get(k);
+      const lv = leaves[k];
+      const cls = ['cal-day'];
+      if (d.getDay() === 0 || d.getDay() === 6) cls.push('weekend');
+      if (k > todayKey) cls.push('future');
+      if (lv) cls.push('leave');
+      if (isLateDay(k, first, leaves, cfg)) cls.push('late');
+      if (first && !outs[k] && k < todayKey) cls.push('miss');
+      if (k === todayKey) cls.push('today');
+      if (k === calSel) cls.push('sel');
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = cls.join(' ');
+      cell.innerHTML = `<span class="n">${day}</span><span class="t">${first ? hm(first) : lv ? LEAVE_SHORT[lv] : ''}</span>`;
+      cell.addEventListener('click', () => {
+        calSel = calSel === k ? null : k;
+        renderCalendar(calCtx);
+      });
+      grid.appendChild(cell);
+    }
+
+    // 該月摘要
+    const s = stats(days, leaves, new Date(y, mo, 1), new Date(y, mo + 1, 1));
+    const workDays = [...days.keys()].filter((k) => k.startsWith(ym)).length;
+    const parts = [`出勤 ${workDays} 天`, `遲到 ${monthLates(days, leaves, cfg, ym)} 次`];
+    if (s.leaveDays) parts.push(`請假 ${s.leaveDays} 天`);
+    if (s.avg != null) parts.push(`平均 ${minsToHM(s.avg)}`);
+    $('calSum').textContent = parts.join('・');
+
+    // 點選日期的明細
+    const box = $('calDetail');
+    if (!calSel || !calSel.startsWith(ym)) { box.hidden = true; return; }
+    const k = calSel;
+    const d = new Date(k + 'T00:00');
+    const first = days.get(k);
+    const out = outs[k] ? new Date(outs[k]) : null;
+    const lv = leaves[k];
+    const lines = [`<b>${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）</b>`];
+    if (lv) lines.push(`請假：${LEAVE_LABEL[lv]}`);
+    if (first) lines.push(`上班 ${hm(first)}${isLateDay(k, first, leaves, cfg) ? '　<span class="late">遲到</span>' : ''}`);
+    if (out) {
+      let line = `下班 ${hm(out)}`;
+      if (first) {
+        const w = workedMins(first, out, lv, cfg);
+        const lack = workRule(lv, cfg).work - w;
+        line += `・工時 ${dur(w)}${lack > 0 ? `　<span class="late">不足 ${dur(lack)}</span>` : ''}`;
+      }
+      lines.push(line);
+    } else if (first && k < todayKey) {
+      lines.push('<span class="late">沒有下班紀錄</span>');
+    }
+    if (!first && !out && !lv) lines.push('沒有紀錄');
+    box.innerHTML = lines.join('<br>');
+    if (k <= todayKey) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn';
+      b.textContent = '補登這天';
+      b.addEventListener('click', () => openManual(k));
+      box.appendChild(b);
+    }
+    box.hidden = false;
+  }
+  $('calPrev').addEventListener('click', () => {
+    calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1);
+    renderCalendar(calCtx);
+  });
+  $('calNext').addEventListener('click', () => {
+    calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1);
+    renderCalendar(calCtx);
+  });
+
   let toastTimer;
   function toast(msg) {
     const t = $('toast');
@@ -603,17 +773,16 @@
   mdlg.querySelectorAll('input[name=mk]').forEach((r) => r.addEventListener('change', () => {
     $('manualTime').value = manualKind() === 'out' ? '18:00' : '08:30';
   }));
-  $('manualBtn').addEventListener('click', () => {
-    const now = new Date();
-    const k = dateKey(now);
-    // 今天已上班、還沒下班 → 預設補登下班
+  // 已上班、還沒下班的日子 → 預設補登下班
+  function openManual(k) {
     const kind = firstPerDay(load()).has(k) && !loadOuts()[k] ? 'out' : 'in';
     mdlg.querySelector(`input[name=mk][value=${kind}]`).checked = true;
     $('manualDate').value = k;
-    $('manualDate').max = k;
+    $('manualDate').max = dateKey(new Date());
     $('manualTime').value = kind === 'out' ? '18:00' : '08:30';
     mdlg.showModal();
-  });
+  }
+  $('manualBtn').addEventListener('click', () => openManual(dateKey(new Date())));
   mdlg.addEventListener('close', () => {
     if (mdlg.returnValue !== 'ok') return;
     const k = $('manualDate').value;
