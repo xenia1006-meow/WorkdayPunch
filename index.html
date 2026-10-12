@@ -144,6 +144,9 @@
   .cal-day .t { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .cal-day.blank { background: none; cursor: default; }
   .cal-day.weekend .n { color: var(--muted); }
+  .cal-day.wkoff { background: #e0e7ff; }
+  .cal-day.wkoff .n { color: #4f46e5; }
+  .cal-day.wkoff .t { color: #4f46e5; }
   .cal-day.future { opacity: .4; }
   .cal-day.late { background: #fee2e2; }
   .cal-day.late .t { color: var(--danger); font-weight: 600; }
@@ -158,6 +161,8 @@
   @media (prefers-color-scheme: dark) {
     .cal-day.late { background: #450a0a; }
     .cal-day.leave { background: #422006; }
+    .cal-day.wkoff { background: #1e1b4b; }
+    .cal-day.wkoff .n, .cal-day.wkoff .t { color: #a5b4fc; }
     .cal-day.holiday { background: #052e16; }
     .cal-day.holiday .t { color: #86efac; }
     .cal-day.leave .t { color: #fcd34d; }
@@ -167,6 +172,7 @@
   .lg.late { background: #fca5a5; }
   .lg.leave { background: #fcd34d; }
   .lg.holiday { background: #86efac; }
+  .lg.wkoff { background: #a5b4fc; }
   .lg.miss { box-shadow: inset 0 0 0 2px #ea580c; }
   .cal-sum { text-align: center; font-size: 13px; color: var(--muted); margin-top: 6px; }
   .cal-detail { margin-top: 10px; padding: 12px 14px; border-radius: 10px; background: var(--bg); font-size: 15px; line-height: 1.7; }
@@ -197,6 +203,8 @@
   .dlg-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
   dialog label + label { display: block; margin-top: 12px; }
+  .chk { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 15px; }
+  .chk input { width: 18px; height: 18px; }
 </style>
 </head>
 <body>
@@ -240,6 +248,7 @@
         <label><input type="radio" name="lt" value="am"><span>上午</span></label>
         <label><input type="radio" name="lt" value="pm"><span>下午</span></label>
       </div>
+      <label class="chk"><input type="checkbox" id="leaveComp">使用補假（抵假日打卡的天數）</label>
       <p class="hint">全天或上午請假的日子，不列入平均到達時間。<br>同一天重複登記會覆蓋原本的假別。</p>
       <div class="dlg-actions">
         <button class="btn" value="cancel" formnovalidate>取消</button>
@@ -264,6 +273,11 @@
       <div class="value" id="lateCount">0</div>
       <div class="sub" id="lateSub"></div>
     </div>
+    <div class="stat wide" id="compCard">
+      <div class="label">補假餘額</div>
+      <div class="value" id="compBal">0 天</div>
+      <div class="sub" id="compSub"></div>
+    </div>
   </section>
 
   <section class="cal">
@@ -276,7 +290,8 @@
     <div class="cal-legend">
       <span><i class="lg late"></i>遲到</span>
       <span><i class="lg leave"></i>請假</span>
-      <span><i class="lg holiday"></i>放假</span>
+      <span><i class="lg wkoff"></i>週末</span>
+      <span><i class="lg holiday"></i>國定假日</span>
       <span><i class="lg miss"></i>沒打下班卡</span>
     </div>
     <div class="cal-sum" id="calSum"></div>
@@ -303,7 +318,7 @@
       <label>每月幾次會收到通知<input type="number" id="setLateLimit" min="1" max="31" inputmode="numeric" required></label>
       <label>每天工時（小時）<input type="number" id="setWorkHours" min="1" max="24" step="0.5" inputmode="decimal" required></label>
       <label>午休（分鐘）<input type="number" id="setLunchMins" min="0" max="180" step="5" inputmode="numeric" required></label>
-      <p class="hint">09:00 整就算遲到，08:59 以前準時；有請假的日子都不算遲到。<br>週六、週日與國定假日不算遲到、不計平均、不檢查工時（可在月曆點日期手動改放假／補班）。<br>最早下班＝上班時間＋工時＋午休。半天假那天只需一半工時，不扣午休。</p>
+      <p class="hint">09:00 整就算遲到，08:59 以前準時；有請假的日子都不算遲到。<br>週六、週日與國定假日不算遲到、不計平均、不檢查工時（可在月曆點日期手動改放假／上班）。<br>最早下班＝上班時間＋工時＋午休。半天假那天只需一半工時，不扣午休。</p>
       <div class="dlg-actions">
         <button class="btn" value="cancel" formnovalidate>取消</button>
         <button class="btn primary" value="ok">儲存</button>
@@ -348,12 +363,18 @@
   const skipsAvg = (type) => type === 'full' || type === 'am';
 
   // 放假日：週六、週日＋國定假日自動視為放假；dayMarks 可手動覆蓋 { 'YYYY-MM-DD': 'off' | 'work' }
-  // 2026 年政府行事曆：只補假、不補班（平日國定假日如下）。2027 年起請在月曆點日期手動標記
+  // 2026、2027 年政府行事曆：只補假、不補班（平日放假日如下）。2028 年起請在月曆點日期手動標記
   const HOLIDAYS = new Set([
     '2026-01-01',
     '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-20', '2026-02-27',
     '2026-04-03', '2026-04-06', '2026-05-01', '2026-06-19',
-    '2026-09-25', '2026-09-28', '2026-10-09', '2026-10-26', '2026-12-25'
+    '2026-09-25', '2026-09-28', '2026-10-09', '2026-10-26', '2026-12-25',
+    // 2027 年（含補假）
+    '2027-01-01',
+    '2027-02-04', '2027-02-05', '2027-02-08', '2027-02-09', '2027-02-10', '2027-03-01',
+    '2027-04-05', '2027-04-06', '2027-04-30', '2027-06-09',
+    '2027-09-15', '2027-09-28', '2027-10-11', '2027-10-25',
+    '2027-12-24', '2027-12-31'
   ]);
   const DAYS_KEY = 'punch-daysoff-v1';
   function loadDayMarks() {
@@ -374,6 +395,24 @@
   const isOff = (k) => dayMarks[k] === 'off' ? true : dayMarks[k] === 'work' ? false : defaultOff(k);
   // 放假日當天沒有最低工時要求
   const lt = (k, leaves) => isOff(k) ? 'off' : leaves[k];
+
+  // 補假：放假日有打卡 1 天抵 1 天；請假登記時勾選「使用補假」即扣除（半天算 0.5）
+  const COMP_KEY = 'punch-comp-v1';
+  function loadComp() {
+    try {
+      const obj = JSON.parse(localStorage.getItem(COMP_KEY) || '{}');
+      return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+    } catch (e) { return {}; }
+  }
+  function saveComp(obj) { localStorage.setItem(COMP_KEY, JSON.stringify(obj)); }
+  function compBalance(days, leaves) {
+    const comp = loadComp();
+    const earned = [...days.keys()].filter((k) => isOff(k)).length;
+    const used = Object.entries(leaves)
+      .filter(([k]) => comp[k])
+      .reduce((n, [, t]) => n + (t === 'full' ? 1 : 0.5), 0);
+    return { earned, used, bal: earned - used };
+  }
 
   // 手動補登的打卡（ISO 時間字串），只用來在列表與 CSV 標示
   const MANUAL_KEY = 'punch-manual-v1';
@@ -492,6 +531,11 @@
     $('lateCard').classList.toggle('warn', left > 0 && left <= 2);
     $('lateCard').classList.toggle('danger', left <= 0);
 
+    const cb = compBalance(days, leaves);
+    $('compBal').textContent = `${cb.bal} 天`;
+    $('compSub').textContent = `放假日打卡 ${cb.earned} 天・已用 ${cb.used} 天`;
+    $('compCard').classList.toggle('danger', cb.bal < 0);
+
     // 今日狀態：大按鈕依序為 到達公司 → 下班打卡 → 已下班
     const outs = loadOuts();
     const todayFirst = days.get(todayKey);
@@ -509,7 +553,7 @@
       if (todayLeave && todayLeave !== 'full') status += `（${LEAVE_LABEL[todayLeave]}請假）`;
     } else {
       status = `上班 ${hm(todayFirst)}`;
-      if (todayOff) status += '（放假日）';
+      if (todayOff) status += '（放假日・可補假）';
       if (todayLeave) status += `（${LEAVE_LABEL[todayLeave]}請假）`;
       if (isLateDay(todayKey, todayFirst, leaves, cfg)) status += '・遲到';
       if (!todayOut) {
@@ -558,12 +602,14 @@
         row.className = 'row leave';
         row.innerHTML =
           `<div class="date">${d.getMonth() + 1}/${d.getDate()}<span class="wd">週${WD[d.getDay()]}</span></div>` +
-          `<span class="tag">請假・${LEAVE_LABEL[item.type]}</span>`;
+          `<span class="tag">請假・${LEAVE_LABEL[item.type]}${loadComp()[item.leave] ? '・補假' : ''}</span>`;
         onDelete = () => {
           if (!confirm(`確定刪除 ${item.leave} 的請假紀錄？`)) return false;
           const lv = loadLeaves();
           delete lv[item.leave];
           saveLeaves(lv);
+          const cp = loadComp();
+          if (cp[item.leave]) { delete cp[item.leave]; saveComp(cp); }
           return true;
         };
       } else if (item.out) {
@@ -668,7 +714,8 @@
       if (k > todayKey) cls.push('future');
       const off = isOff(k);
       if (lv) cls.push('leave');
-      if (off && d.getDay() !== 0 && d.getDay() !== 6) cls.push('holiday');
+      const wkend = d.getDay() === 0 || d.getDay() === 6;
+      if (off) cls.push(wkend ? 'wkoff' : 'holiday');
       if (isLateDay(k, first, leaves, cfg)) cls.push('late');
       if (first && !outs[k] && k < todayKey && !off) cls.push('miss');
       if (k === todayKey) cls.push('today');
@@ -676,7 +723,7 @@
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = cls.join(' ');
-      cell.innerHTML = `<span class="n">${day}</span><span class="t">${first ? hm(first) : lv ? LEAVE_SHORT[lv] : dayMarks[k] === 'work' ? '補班' : cls.includes('holiday') ? '假' : ''}</span>`;
+      cell.innerHTML = `<span class="n">${day}</span><span class="t">${first ? hm(first) : lv ? LEAVE_SHORT[lv] : dayMarks[k] === 'work' ? '補班' : cls.includes('wkoff') ? '休' : cls.includes('holiday') ? '假' : ''}</span>`;
       cell.addEventListener('click', () => {
         calSel = calSel === k ? null : k;
         renderCalendar(calCtx);
@@ -703,7 +750,7 @@
     const lines = [`<b>${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）</b>`];
     if (lv) lines.push(`請假：${LEAVE_LABEL[lv]}`);
     if (isOff(k)) lines.push('放假日・不計遲到與平均');
-    else if (dayMarks[k] === 'work') lines.push('補班日');
+    else if (dayMarks[k] === 'work') lines.push('上班日（原為放假）');
     if (first) lines.push(`上班 ${hm(first)}${isLateDay(k, first, leaves, cfg) ? '　<span class="late">遲到</span>' : ''}`);
     if (out) {
       let line = `下班 ${hm(out)}`;
@@ -721,7 +768,7 @@
     const tg = document.createElement('button');
     tg.type = 'button';
     tg.className = 'btn';
-    tg.textContent = isOff(k) ? '改為上班日（補班）' : '標記為放假日';
+    tg.textContent = isOff(k) ? '改為上班日' : '標記為放假日';
     tg.addEventListener('click', () => {
       const marks = { ...dayMarks };
       const want = !isOff(k);
@@ -884,11 +931,13 @@
   // 請假登記
   const dlg = $('leaveDlg');
   const setType = (t) => { dlg.querySelector(`input[name=lt][value=${t}]`).checked = true; };
-  $('leaveDate').addEventListener('change', (e) => setType(loadLeaves()[e.target.value] || 'full'));
+  const setComp = (k) => { $('leaveComp').checked = !!loadComp()[k]; };
+  $('leaveDate').addEventListener('change', (e) => { setType(loadLeaves()[e.target.value] || 'full'); setComp(e.target.value); });
   $('leaveBtn').addEventListener('click', () => {
     const k = dateKey(new Date());
     $('leaveDate').value = k;
     setType(loadLeaves()[k] || 'full');
+    setComp(k);
     dlg.showModal();
   });
   dlg.addEventListener('close', () => {
@@ -899,6 +948,9 @@
     const leaves = loadLeaves();
     leaves[k] = t;
     saveLeaves(leaves);
+    const cp = loadComp();
+    if ($('leaveComp').checked) cp[k] = true; else delete cp[k];
+    saveComp(cp);
     render();
     toast(`已登記 ${k.slice(5).replace('-', '/')} ${LEAVE_LABEL[t]}請假`);
   });
@@ -916,7 +968,7 @@
     }
     for (const [k, t] of Object.entries(leaves)) {
       const d = new Date(k + 'T00:00');
-      rows.push([`${k} 00`, `${k},週${WD[d.getDay()]},,,請假-${LEAVE_LABEL[t]}`]);
+      rows.push([`${k} 00`, `${k},週${WD[d.getDay()]},,,請假-${LEAVE_LABEL[t]}${loadComp()[k] ? '-補假' : ''}`]);
     }
     for (const [k, t] of Object.entries(dayMarks)) {
       const d = new Date(k + 'T00:00');
@@ -963,6 +1015,7 @@
     const manual = loadManual();
     const outs = loadOuts();
     const marks = { ...dayMarks };
+    const comp = loadComp();
     let added = 0, found = 0;
     for (const line of text.split(/\r?\n/).slice(1)) {
       const cols = line.split(',').map((c) => c.trim());
@@ -978,6 +1031,7 @@
       if (leaveType) {
         found++;
         if (leaves[date] !== leaveType) { leaves[date] = leaveType; added++; }
+        if (cols[4].split('-')[2] === '補假') comp[date] = true;
         continue;
       }
       let d = cols[3] ? new Date(cols[3]) : null;
@@ -999,6 +1053,7 @@
     saveOuts(outs);
     saveManual(manual);
     saveDayMarks(marks);
+    saveComp(comp);
     render();
     toast(`匯入完成，新增 ${added} 筆`);
   });
