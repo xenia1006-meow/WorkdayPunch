@@ -149,6 +149,8 @@
   .cal-day.late .t { color: var(--danger); font-weight: 600; }
   .cal-day.leave { background: #fef3c7; }
   .cal-day.leave .t { color: #b45309; }
+  .cal-day.holiday { background: #dcfce7; }
+  .cal-day.holiday .t { color: #15803d; }
   .cal-day.miss { box-shadow: inset 0 0 0 2px #ea580c; }
   .cal-day.today .n { color: var(--primary); }
   .cal-day.today { box-shadow: inset 0 0 0 2px var(--primary); }
@@ -156,12 +158,15 @@
   @media (prefers-color-scheme: dark) {
     .cal-day.late { background: #450a0a; }
     .cal-day.leave { background: #422006; }
+    .cal-day.holiday { background: #052e16; }
+    .cal-day.holiday .t { color: #86efac; }
     .cal-day.leave .t { color: #fcd34d; }
   }
   .cal-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; font-size: 12px; color: var(--muted); margin-top: 10px; }
   .lg { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
   .lg.late { background: #fca5a5; }
   .lg.leave { background: #fcd34d; }
+  .lg.holiday { background: #86efac; }
   .lg.miss { box-shadow: inset 0 0 0 2px #ea580c; }
   .cal-sum { text-align: center; font-size: 13px; color: var(--muted); margin-top: 6px; }
   .cal-detail { margin-top: 10px; padding: 12px 14px; border-radius: 10px; background: var(--bg); font-size: 15px; line-height: 1.7; }
@@ -271,6 +276,7 @@
     <div class="cal-legend">
       <span><i class="lg late"></i>遲到</span>
       <span><i class="lg leave"></i>請假</span>
+      <span><i class="lg holiday"></i>放假</span>
       <span><i class="lg miss"></i>沒打下班卡</span>
     </div>
     <div class="cal-sum" id="calSum"></div>
@@ -297,7 +303,7 @@
       <label>每月幾次會收到通知<input type="number" id="setLateLimit" min="1" max="31" inputmode="numeric" required></label>
       <label>每天工時（小時）<input type="number" id="setWorkHours" min="1" max="24" step="0.5" inputmode="decimal" required></label>
       <label>午休（分鐘）<input type="number" id="setLunchMins" min="0" max="180" step="5" inputmode="numeric" required></label>
-      <p class="hint">09:00 整就算遲到，08:59 以前準時；有請假的日子都不算遲到。<br>最早下班＝上班時間＋工時＋午休。半天假那天只需一半工時，不扣午休。</p>
+      <p class="hint">09:00 整就算遲到，08:59 以前準時；有請假的日子都不算遲到。<br>週六、週日與國定假日不算遲到、不計平均、不檢查工時（可在月曆點日期手動改放假／補班）。<br>最早下班＝上班時間＋工時＋午休。半天假那天只需一半工時，不扣午休。</p>
       <div class="dlg-actions">
         <button class="btn" value="cancel" formnovalidate>取消</button>
         <button class="btn primary" value="ok">儲存</button>
@@ -341,6 +347,34 @@
   // 全天或上午請假，當天到達時間不算進平均
   const skipsAvg = (type) => type === 'full' || type === 'am';
 
+  // 放假日：週六、週日＋國定假日自動視為放假；dayMarks 可手動覆蓋 { 'YYYY-MM-DD': 'off' | 'work' }
+  // 2026 年政府行事曆：只補假、不補班（平日國定假日如下）。2027 年起請在月曆點日期手動標記
+  const HOLIDAYS = new Set([
+    '2026-01-01',
+    '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19', '2026-02-20', '2026-02-27',
+    '2026-04-03', '2026-04-06', '2026-05-01', '2026-06-19',
+    '2026-09-25', '2026-09-28', '2026-10-09', '2026-10-26', '2026-12-25'
+  ]);
+  const DAYS_KEY = 'punch-daysoff-v1';
+  function loadDayMarks() {
+    try {
+      const obj = JSON.parse(localStorage.getItem(DAYS_KEY) || '{}');
+      return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+    } catch (e) { return {}; }
+  }
+  let dayMarks = loadDayMarks();
+  function saveDayMarks(obj) {
+    dayMarks = obj;
+    localStorage.setItem(DAYS_KEY, JSON.stringify(obj));
+  }
+  const defaultOff = (k) => {
+    const wd = new Date(k + 'T00:00').getDay();
+    return wd === 0 || wd === 6 || HOLIDAYS.has(k);
+  };
+  const isOff = (k) => dayMarks[k] === 'off' ? true : dayMarks[k] === 'work' ? false : defaultOff(k);
+  // 放假日當天沒有最低工時要求
+  const lt = (k, leaves) => isOff(k) ? 'off' : leaves[k];
+
   // 手動補登的打卡（ISO 時間字串），只用來在列表與 CSV 標示
   const MANUAL_KEY = 'punch-manual-v1';
   function loadManual() {
@@ -365,7 +399,7 @@
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(cfg));
   }
   // 當天第一筆打卡在設定時間（含）之後算遲到；有請假（全天、上午、下午）的日子都不算
-  const isLateDay = (k, first, leaves, cfg) => !!first && !leaves[k] && hm(first) >= cfg.lateTime;
+  const isLateDay = (k, first, leaves, cfg) => !!first && !leaves[k] && !isOff(k) && hm(first) >= cfg.lateTime;
   const monthLates = (days, leaves, cfg, ym) =>
     [...days.entries()].filter(([k, d]) => k.startsWith(ym) && isLateDay(k, d, leaves, cfg)).length;
 
@@ -382,6 +416,7 @@
   }
   // 當天應上班分鐘數與要扣的午休：半天假只需一半工時、不扣午休
   function workRule(leaveType, cfg) {
+    if (leaveType === 'off') return { work: 0, lunch: 0 };
     const half = leaveType === 'am' || leaveType === 'pm';
     return { work: cfg.workHours * 60 / (half ? 2 : 1), lunch: half ? 0 : cfg.lunchMins };
   }
@@ -413,10 +448,10 @@
   function stats(days, leaves, start, end) {
     const from = dateKey(start), to = dateKey(end);
     const list = [...days.entries()]
-      .filter(([k]) => k >= from && k < to && !skipsAvg(leaves[k]))
+      .filter(([k]) => k >= from && k < to && !skipsAvg(leaves[k]) && !isOff(k))
       .map(([, d]) => d);
     const leaveDays = Object.entries(leaves)
-      .filter(([k]) => k >= from && k < to)
+      .filter(([k]) => k >= from && k < to && !isOff(k))
       .reduce((n, [, t]) => n + (t === 'full' ? 1 : 0.5), 0);
     const total = list.reduce((sum, d) => sum + d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60, 0);
     return { avg: list.length ? total / list.length : null, count: list.length, leaveDays };
@@ -462,23 +497,26 @@
     const todayFirst = days.get(todayKey);
     const todayOut = outs[todayKey] ? new Date(outs[todayKey]) : null;
     const todayLeave = leaves[todayKey];
+    const todayOff = isOff(todayKey);
+    const todayLT = lt(todayKey, leaves);
     const btn = $('punch');
     btn.textContent = !todayFirst ? '到達公司' : !todayOut ? '下班打卡' : '已下班';
     btn.classList.toggle('out', !!todayFirst && !todayOut);
     btn.classList.toggle('done', !!todayFirst && !!todayOut);
     let status;
     if (!todayFirst) {
-      status = todayLeave === 'full' ? '今天請假（全天）' : '今天尚未打卡';
+      status = todayOff ? '今天放假' : todayLeave === 'full' ? '今天請假（全天）' : '今天尚未打卡';
       if (todayLeave && todayLeave !== 'full') status += `（${LEAVE_LABEL[todayLeave]}請假）`;
     } else {
       status = `上班 ${hm(todayFirst)}`;
+      if (todayOff) status += '（放假日）';
       if (todayLeave) status += `（${LEAVE_LABEL[todayLeave]}請假）`;
       if (isLateDay(todayKey, todayFirst, leaves, cfg)) status += '・遲到';
       if (!todayOut) {
-        status += `\n最早可下班 ${hm(earliestOff(todayFirst, todayLeave, cfg))}`;
+        if (!todayOff) status += `\n最早可下班 ${hm(earliestOff(todayFirst, todayLeave, cfg))}`;
       } else {
-        const w = workedMins(todayFirst, todayOut, todayLeave, cfg);
-        const short = workRule(todayLeave, cfg).work - w;
+        const w = workedMins(todayFirst, todayOut, todayLT, cfg);
+        const short = workRule(todayLT, cfg).work - w;
         status += ` → 下班 ${hm(todayOut)}\n工時 ${dur(w)}${short > 0 ? `・不足 ${dur(short)}` : ' ✓'}`;
       }
     }
@@ -534,8 +572,8 @@
         const first = days.get(k);
         let note = '', short = false;
         if (first) {
-          const w = workedMins(first, d, leaves[k], cfg);
-          const lack = workRule(leaves[k], cfg).work - w;
+          const w = workedMins(first, d, lt(k, leaves), cfg);
+          const lack = workRule(lt(k, leaves), cfg).work - w;
           short = lack > 0;
           note = short ? `不足 ${dur(lack)}` : `工時 ${dur(w)}`;
         }
@@ -559,7 +597,7 @@
         const k = dateKey(d);
         const isFirst = days.get(k).getTime() === d.getTime();
         const late = isFirst && isLateDay(k, d, leaves, cfg);
-        const note = [manual.has(item.punch) && '手動', !isFirst ? '重複' : skipsAvg(leaves[k]) && '不計平均']
+        const note = [manual.has(item.punch) && '手動', !isFirst ? '重複' : isOff(k) ? '放假日・不計平均' : skipsAvg(leaves[k]) && '不計平均']
           .filter(Boolean).join('・');
         row.className = 'row';
         row.innerHTML =
@@ -628,15 +666,17 @@
       const cls = ['cal-day'];
       if (d.getDay() === 0 || d.getDay() === 6) cls.push('weekend');
       if (k > todayKey) cls.push('future');
+      const off = isOff(k);
       if (lv) cls.push('leave');
+      if (off && d.getDay() !== 0 && d.getDay() !== 6) cls.push('holiday');
       if (isLateDay(k, first, leaves, cfg)) cls.push('late');
-      if (first && !outs[k] && k < todayKey) cls.push('miss');
+      if (first && !outs[k] && k < todayKey && !off) cls.push('miss');
       if (k === todayKey) cls.push('today');
       if (k === calSel) cls.push('sel');
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = cls.join(' ');
-      cell.innerHTML = `<span class="n">${day}</span><span class="t">${first ? hm(first) : lv ? LEAVE_SHORT[lv] : ''}</span>`;
+      cell.innerHTML = `<span class="n">${day}</span><span class="t">${first ? hm(first) : lv ? LEAVE_SHORT[lv] : dayMarks[k] === 'work' ? '補班' : cls.includes('holiday') ? '假' : ''}</span>`;
       cell.addEventListener('click', () => {
         calSel = calSel === k ? null : k;
         renderCalendar(calCtx);
@@ -646,7 +686,7 @@
 
     // 該月摘要
     const s = stats(days, leaves, new Date(y, mo, 1), new Date(y, mo + 1, 1));
-    const workDays = [...days.keys()].filter((k) => k.startsWith(ym)).length;
+    const workDays = [...days.keys()].filter((k) => k.startsWith(ym) && !isOff(k)).length;
     const parts = [`出勤 ${workDays} 天`, `遲到 ${monthLates(days, leaves, cfg, ym)} 次`];
     if (s.leaveDays) parts.push(`請假 ${s.leaveDays} 天`);
     if (s.avg != null) parts.push(`平均 ${minsToHM(s.avg)}`);
@@ -662,20 +702,34 @@
     const lv = leaves[k];
     const lines = [`<b>${d.getMonth() + 1}/${d.getDate()}（${WD[d.getDay()]}）</b>`];
     if (lv) lines.push(`請假：${LEAVE_LABEL[lv]}`);
+    if (isOff(k)) lines.push('放假日・不計遲到與平均');
+    else if (dayMarks[k] === 'work') lines.push('補班日');
     if (first) lines.push(`上班 ${hm(first)}${isLateDay(k, first, leaves, cfg) ? '　<span class="late">遲到</span>' : ''}`);
     if (out) {
       let line = `下班 ${hm(out)}`;
       if (first) {
-        const w = workedMins(first, out, lv, cfg);
-        const lack = workRule(lv, cfg).work - w;
+        const w = workedMins(first, out, lt(k, leaves), cfg);
+        const lack = workRule(lt(k, leaves), cfg).work - w;
         line += `・工時 ${dur(w)}${lack > 0 ? `　<span class="late">不足 ${dur(lack)}</span>` : ''}`;
       }
       lines.push(line);
-    } else if (first && k < todayKey) {
+    } else if (first && k < todayKey && !isOff(k)) {
       lines.push('<span class="late">沒有下班紀錄</span>');
     }
     if (!first && !out && !lv) lines.push('沒有紀錄');
     box.innerHTML = lines.join('<br>');
+    const tg = document.createElement('button');
+    tg.type = 'button';
+    tg.className = 'btn';
+    tg.textContent = isOff(k) ? '改為上班日（補班）' : '標記為放假日';
+    tg.addEventListener('click', () => {
+      const marks = { ...dayMarks };
+      const want = !isOff(k);
+      if (want === defaultOff(k)) delete marks[k]; else marks[k] = want ? 'off' : 'work';
+      saveDayMarks(marks);
+      render();
+    });
+    box.appendChild(tg);
     if (k <= todayKey) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -716,7 +770,7 @@
     if (todayFirst) {
       const outs = loadOuts();
       if (outs[k] && !confirm(`今天 ${hm(new Date(outs[k]))} 已經下班打卡，要更新成現在的時間嗎？`)) return;
-      const need = earliestOff(todayFirst, leaves[k], cfg);
+      const need = earliestOff(todayFirst, lt(k, leaves), cfg);
       if (now < need && !confirm(`還沒到最早下班時間 ${hm(need)}（還差 ${dur(Math.ceil((need - now) / 60000))}），確定要下班打卡嗎？`)) return;
       const m = loadManual();
       if (outs[k] && m.delete(outs[k])) saveManual(m);
@@ -724,7 +778,7 @@
       saveOuts(outs);
       if (navigator.vibrate) navigator.vibrate(60);
       render();
-      toast(`下班打卡 ${hm(now)}・工時 ${dur(workedMins(todayFirst, now, leaves[k], cfg))}`);
+      toast(`下班打卡 ${hm(now)}・工時 ${dur(workedMins(todayFirst, now, lt(k, leaves), cfg))}`);
       return;
     }
 
@@ -864,6 +918,10 @@
       const d = new Date(k + 'T00:00');
       rows.push([`${k} 00`, `${k},週${WD[d.getDay()]},,,請假-${LEAVE_LABEL[t]}`]);
     }
+    for (const [k, t] of Object.entries(dayMarks)) {
+      const d = new Date(k + 'T00:00');
+      rows.push([`${k} 00`, `${k},週${WD[d.getDay()]},,,假日-${t === 'work' ? '補班' : '放假'}`]);
+    }
     for (const s of Object.values(loadOuts())) {
       const d = new Date(s);
       const type = manual.has(s) ? '下班-手動' : '下班';
@@ -873,7 +931,7 @@
     rows.sort((a, b) => (a[0] < b[0] ? -1 : 1));
     const lines = ['日期,星期,時間,ISO時間,類型', ...rows.map((r) => r[1])];
     const name = `打卡紀錄_${dateKey(new Date())}.csv`;
-    const file = new File(['﻿' + lines.join('\r\n')], name, { type: 'text/csv;charset=utf-8' });
+    const file = new File(['\uFEFF' + lines.join('\r\n')], name, { type: 'text/csv;charset=utf-8' });
 
     // iPhone 主畫面 App 不支援一般下載，改用分享選單（可存到「檔案」、LINE、Email）
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -899,16 +957,23 @@
     const file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
-    const text = (await file.text()).replace(/^﻿/, '');
+    const text = (await file.text()).replace(/^\uFEFF/, '');
     const set = new Set(load());
     const leaves = loadLeaves();
     const manual = loadManual();
     const outs = loadOuts();
+    const marks = { ...dayMarks };
     let added = 0, found = 0;
     for (const line of text.split(/\r?\n/).slice(1)) {
       const cols = line.split(',').map((c) => c.trim());
       if (cols.length < 3) continue;
       const date = cols[0].replace(/\//g, '-');
+      if ((cols[4] || '').startsWith('假日')) {
+        found++;
+        const v = cols[4] === '假日-補班' ? 'work' : 'off';
+        if (marks[date] !== v) { marks[date] = v; added++; }
+        continue;
+      }
       const leaveType = (cols[4] || '').startsWith('請假') && LABEL_TO_TYPE[cols[4].split('-')[1]];
       if (leaveType) {
         found++;
@@ -933,6 +998,7 @@
     saveLeaves(leaves);
     saveOuts(outs);
     saveManual(manual);
+    saveDayMarks(marks);
     render();
     toast(`匯入完成，新增 ${added} 筆`);
   });
