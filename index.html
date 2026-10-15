@@ -126,7 +126,13 @@
 
   .cal { background: var(--card); border-radius: 14px; padding: 12px; margin-bottom: 20px; }
   .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-  .cal-head h2 { margin: 0; font-size: 17px; }
+  .cal-head h2 { margin: 0; font-size: 17px; justify-content: center; }
+  .cal-mid { display: flex; flex-direction: column; align-items: center; }
+  .cal-today {
+    border: none; background: none; color: var(--primary); font-size: 13px; padding: 2px 8px;
+    cursor: pointer; font-family: inherit;
+  }
+  .cal-grid { touch-action: pan-y; }
   .cal-nav {
     width: 44px; height: 40px; border: none; background: none; color: var(--text);
     font-size: 26px; border-radius: 10px; cursor: pointer; font-family: inherit;
@@ -148,6 +154,7 @@
   .cal-day.wkoff .n { color: #4f46e5; }
   .cal-day.wkoff .t { color: #4f46e5; }
   .cal-day.future { opacity: .4; }
+  .cal-day.future.leave { opacity: .85; }
   .cal-day.late { background: #fee2e2; }
   .cal-day.late .t { color: var(--danger); font-weight: 600; }
   .cal-day.leave { background: #fef3c7; }
@@ -283,7 +290,10 @@
   <section class="cal">
     <div class="cal-head">
       <button class="cal-nav" id="calPrev" type="button" aria-label="上個月">‹</button>
-      <h2 id="calTitle"></h2>
+      <div class="cal-mid">
+        <h2 id="calTitle"></h2>
+        <button class="cal-today" id="calToday" type="button" hidden>回到本月</button>
+      </div>
       <button class="cal-nav" id="calNext" type="button" aria-label="下個月">›</button>
     </div>
     <div class="cal-grid" id="calGrid"></div>
@@ -577,7 +587,7 @@
       if (d >= cutoff) items.push({ sort: `${dateKey(d)} ${hms(d)}`, punch: s, d });
     }
     for (const [k, t] of Object.entries(leaves)) {
-      if (k >= cutoffKey) items.push({ sort: `${k} 99`, leave: k, type: t });
+      if (k >= cutoffKey && k <= todayKey) items.push({ sort: `${k} 99`, leave: k, type: t });
     }
     for (const [k, s] of Object.entries(outs)) {
       const d = new Date(s);
@@ -687,7 +697,7 @@
     const y = calMonth.getFullYear(), mo = calMonth.getMonth();
     const ym = `${y}-${pad(mo + 1)}`;
     $('calTitle').textContent = `${y} 年 ${mo + 1} 月`;
-    $('calNext').disabled = calMonth >= thisMonth;
+    $('calToday').hidden = calMonth.getTime() === thisMonth.getTime();
 
     const grid = $('calGrid');
     grid.innerHTML = '';
@@ -777,24 +787,47 @@
       render();
     });
     box.appendChild(tg);
+    // 打卡只能補登今天以前；請假未來也能先登記
     if (k <= todayKey) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'btn';
-      b.textContent = '補登這天';
+      b.textContent = '補登打卡';
       b.addEventListener('click', () => openManual(k));
       box.appendChild(b);
     }
+    const lb = document.createElement('button');
+    lb.type = 'button';
+    lb.className = 'btn';
+    lb.textContent = lv ? '修改請假' : '登記請假';
+    lb.addEventListener('click', () => openLeave(k));
+    box.appendChild(lb);
     box.hidden = false;
   }
-  $('calPrev').addEventListener('click', () => {
-    calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1);
+  function shiftMonth(n) {
+    calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + n, 1);
+    renderCalendar(calCtx);
+  }
+  $('calPrev').addEventListener('click', () => shiftMonth(-1));
+  $('calNext').addEventListener('click', () => shiftMonth(1));
+  $('calToday').addEventListener('click', () => {
+    const now = new Date();
+    calMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     renderCalendar(calCtx);
   });
-  $('calNext').addEventListener('click', () => {
-    calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1);
-    renderCalendar(calCtx);
-  });
+  // 在月曆上左右滑動換月
+  let swipeX = null, swipeY = null;
+  $('calGrid').addEventListener('touchstart', (e) => {
+    swipeX = e.touches[0].clientX;
+    swipeY = e.touches[0].clientY;
+  }, { passive: true });
+  $('calGrid').addEventListener('touchend', (e) => {
+    if (swipeX == null) return;
+    const dx = e.changedTouches[0].clientX - swipeX;
+    const dy = e.changedTouches[0].clientY - swipeY;
+    swipeX = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) shiftMonth(dx < 0 ? 1 : -1);
+  }, { passive: true });
 
   let toastTimer;
   function toast(msg) {
@@ -933,13 +966,13 @@
   const setType = (t) => { dlg.querySelector(`input[name=lt][value=${t}]`).checked = true; };
   const setComp = (k) => { $('leaveComp').checked = !!loadComp()[k]; };
   $('leaveDate').addEventListener('change', (e) => { setType(loadLeaves()[e.target.value] || 'full'); setComp(e.target.value); });
-  $('leaveBtn').addEventListener('click', () => {
-    const k = dateKey(new Date());
+  function openLeave(k) {
     $('leaveDate').value = k;
     setType(loadLeaves()[k] || 'full');
     setComp(k);
     dlg.showModal();
-  });
+  }
+  $('leaveBtn').addEventListener('click', () => openLeave(dateKey(new Date())));
   dlg.addEventListener('close', () => {
     if (dlg.returnValue !== 'ok') return;
     const k = $('leaveDate').value;
