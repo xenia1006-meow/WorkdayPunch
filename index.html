@@ -146,6 +146,23 @@
     font-family: inherit; padding: 6px 0 0; display: flex; flex-direction: column; align-items: center; gap: 2px;
     cursor: pointer;
   }
+  .cal-day { position: relative; }
+  .cal-day .dot {
+    position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: #d946ef;
+  }
+  .lg.note { background: #d946ef; border-radius: 50%; }
+  #todayNote {
+    margin-top: 8px; padding: 6px 14px; border-radius: 999px; background: #fae8ff; color: #a21caf;
+    font-size: 15px; text-align: center;
+  }
+  @media (prefers-color-scheme: dark) { #todayNote { background: #4a044e; color: #f0abfc; } }
+  .note-item { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .note-item span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .note-item button {
+    border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 8px;
+    padding: 4px 10px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  #noteDel { width: 100%; margin-top: 10px; color: var(--danger); }
   .cal-day .n { font-size: 14px; font-weight: 600; }
   .cal-day .t { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .cal-day.blank { background: none; cursor: default; }
@@ -194,7 +211,7 @@
   }
   dialog::backdrop { background: rgba(0, 0, 0, .45); }
   dialog h3 { margin: 0 0 16px; font-size: 19px; text-align: center; }
-  dialog input[type=date], dialog input[type=time], dialog input[type=number] {
+  dialog input[type=date], dialog input[type=time], dialog input[type=number], dialog input[type=text] {
     display: block; width: 100%; margin-top: 6px; font-size: 17px; padding: 10px;
     border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font-family: inherit;
   }
@@ -223,6 +240,7 @@
   <div class="punch-wrap">
     <button id="punch" type="button">到達公司</button>
     <div id="status"></div>
+    <div id="todayNote" hidden></div>
     <div class="sub-btns">
       <button id="manualBtn" type="button">手動打卡</button>
       <button id="leaveBtn" type="button">請假登記</button>
@@ -303,6 +321,7 @@
       <span><i class="lg wkoff"></i>週末</span>
       <span><i class="lg holiday"></i>國定假日</span>
       <span><i class="lg miss"></i>沒打下班卡</span>
+      <span><i class="lg note"></i>備註</span>
     </div>
     <div class="cal-sum" id="calSum"></div>
     <div class="cal-detail" id="calDetail" hidden></div>
@@ -333,6 +352,19 @@
         <button class="btn" value="cancel" formnovalidate>取消</button>
         <button class="btn primary" value="ok">儲存</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="noteDlg">
+    <form method="dialog">
+      <h3 id="noteTitle">新增備註</h3>
+      <label>內容<input type="text" id="noteText" maxlength="100" placeholder="例如：小明生日" required></label>
+      <label class="chk"><input type="checkbox" id="noteYearly">每年重複（生日、紀念日）</label>
+      <div class="dlg-actions">
+        <button class="btn" value="cancel" formnovalidate>取消</button>
+        <button class="btn primary" value="ok">儲存</button>
+      </div>
+      <button class="btn" id="noteDel" value="delete" formnovalidate>刪除這則備註</button>
     </form>
   </dialog>
 
@@ -576,6 +608,10 @@
     }
     $('status').textContent = status;
 
+    const todayNotes = notesFor(todayKey, loadNotes());
+    $('todayNote').hidden = !todayNotes.length;
+    $('todayNote').textContent = todayNotes.length ? `📌 今天：${todayNotes.map((n) => n.text).join('、')}` : '';
+
     renderCalendar({ days, leaves, outs, cfg, todayKey });
 
     // 最近 30 天：打卡與請假合併，依日期新到舊（同一天請假列在打卡上方）
@@ -682,6 +718,26 @@
     }
   }
 
+  // 日期備註：{ 'YYYY-MM-DD': { text, yearly } }，yearly 代表之後每年同一天都顯示（生日、紀念日）
+  const NOTE_KEY = 'punch-notes-v1';
+  function loadNotes() {
+    try {
+      const obj = JSON.parse(localStorage.getItem(NOTE_KEY) || '{}');
+      return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
+    } catch (e) { return {}; }
+  }
+  function saveNotes(obj) {
+    localStorage.setItem(NOTE_KEY, JSON.stringify(obj));
+  }
+  // 某天要顯示的備註：當天的，加上更早年份設成每年重複的同月同日
+  function notesFor(k, notes) {
+    const md = k.slice(5);
+    return Object.entries(notes)
+      .filter(([nk, n]) => nk === k || (n.yearly && nk.slice(5) === md && nk < k))
+      .map(([nk, n]) => ({ key: nk, text: n.text, yearly: !!n.yearly }));
+  }
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
   // 月曆：calMonth 為顯示月份的 1 號，calSel 為點選的日期
   let calMonth = null;
   let calSel = null;
@@ -691,6 +747,7 @@
   function renderCalendar(ctx) {
     calCtx = ctx;
     const { days, leaves, outs, cfg, todayKey } = ctx;
+    const notes = loadNotes();
     const now = new Date();
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     if (!calMonth) calMonth = thisMonth;
@@ -733,7 +790,8 @@
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = cls.join(' ');
-      cell.innerHTML = `<span class="n">${day}</span><span class="t">${first ? hm(first) : lv ? LEAVE_SHORT[lv] : dayMarks[k] === 'work' ? '補班' : cls.includes('wkoff') ? '休' : cls.includes('holiday') ? '假' : ''}</span>`;
+      cell.innerHTML = `<span class="n">${day}</span><span class="t">${first ? hm(first) : lv ? LEAVE_SHORT[lv] : dayMarks[k] === 'work' ? '補班' : cls.includes('wkoff') ? '休' : cls.includes('holiday') ? '假' : ''}</span>` +
+        (notesFor(k, notes).length ? '<i class="dot"></i>' : '');
       cell.addEventListener('click', () => {
         calSel = calSel === k ? null : k;
         renderCalendar(calCtx);
@@ -773,8 +831,25 @@
     } else if (first && k < todayKey && !isOff(k)) {
       lines.push('<span class="late">沒有下班紀錄</span>');
     }
-    if (!first && !out && !lv) lines.push('沒有紀錄');
+    const dayNotes = notesFor(k, notes);
+    if (!first && !out && !lv && !dayNotes.length) lines.push('沒有紀錄');
     box.innerHTML = lines.join('<br>');
+    for (const n of dayNotes) {
+      const item = document.createElement('div');
+      item.className = 'note-item';
+      item.innerHTML = `<span>📌 ${esc(n.text)}${n.yearly ? '（每年）' : ''}</span><button type="button">編輯</button>`;
+      item.querySelector('button').addEventListener('click', () => openNote(k, n));
+      box.appendChild(item);
+    }
+    // 這天自己的備註只有一則；已有就用「編輯」，沒有才顯示「新增備註」
+    if (!dayNotes.some((n) => n.key === k)) {
+      const nb = document.createElement('button');
+      nb.type = 'button';
+      nb.className = 'btn';
+      nb.textContent = '新增備註';
+      nb.addEventListener('click', () => openNote(k, null));
+      box.appendChild(nb);
+    }
     const tg = document.createElement('button');
     tg.type = 'button';
     tg.className = 'btn';
@@ -804,6 +879,36 @@
     box.appendChild(lb);
     box.hidden = false;
   }
+  // 備註對話框：新增時 noteKey 為點選的日期；編輯每年重複的備註時，改的是最初設定那天的那一則
+  const ndlg = $('noteDlg');
+  let noteKey = null;
+  function openNote(k, existing) {
+    noteKey = existing ? existing.key : k;
+    $('noteTitle').textContent = existing ? '編輯備註' : '新增備註';
+    $('noteText').value = existing ? existing.text : '';
+    $('noteYearly').checked = existing ? existing.yearly : false;
+    $('noteDel').hidden = !existing;
+    ndlg.showModal();
+  }
+  ndlg.addEventListener('close', () => {
+    const notes = loadNotes();
+    if (ndlg.returnValue === 'delete') {
+      if (!confirm('確定刪除這則備註？')) return;
+      delete notes[noteKey];
+      saveNotes(notes);
+      render();
+      toast('已刪除備註');
+      return;
+    }
+    if (ndlg.returnValue !== 'ok') return;
+    const text = $('noteText').value.trim();
+    if (!text) return;
+    notes[noteKey] = { text, yearly: $('noteYearly').checked };
+    saveNotes(notes);
+    render();
+    toast('已儲存備註');
+  });
+
   function shiftMonth(n) {
     calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + n, 1);
     renderCalendar(calCtx);
@@ -1012,9 +1117,14 @@
       const type = manual.has(s) ? '下班-手動' : '下班';
       rows.push([`${dateKey(d)} ${hms(d)}`, `${dateKey(d)},週${WD[d.getDay()]},${hms(d)},${s},${type}`]);
     }
+    // 備註內容可能有逗號，用雙引號包起來
+    for (const [k, n] of Object.entries(loadNotes())) {
+      const d = new Date(k + 'T00:00');
+      rows.push([`${k} 00`, `${k},週${WD[d.getDay()]},,,備註${n.yearly ? '-每年' : ''},"${n.text.replace(/"/g, '""')}"`]);
+    }
     if (!rows.length) { toast('沒有資料可匯出'); return; }
     rows.sort((a, b) => (a[0] < b[0] ? -1 : 1));
-    const lines = ['日期,星期,時間,ISO時間,類型', ...rows.map((r) => r[1])];
+    const lines = ['日期,星期,時間,ISO時間,類型,備註內容', ...rows.map((r) => r[1])];
     const name = `打卡紀錄_${dateKey(new Date())}.csv`;
     const file = new File(['\uFEFF' + lines.join('\r\n')], name, { type: 'text/csv;charset=utf-8' });
 
@@ -1049,11 +1159,24 @@
     const outs = loadOuts();
     const marks = { ...dayMarks };
     const comp = loadComp();
+    const notes = loadNotes();
     let added = 0, found = 0;
     for (const line of text.split(/\r?\n/).slice(1)) {
       const cols = line.split(',').map((c) => c.trim());
       if (cols.length < 3) continue;
       const date = cols[0].replace(/\//g, '-');
+      if ((cols[4] || '').startsWith('備註')) {
+        const raw = line.split(',').slice(5).join(',').trim();
+        const noteText = raw.replace(/^"([\s\S]*)"$/, '$1').replace(/""/g, '"').trim();
+        if (!noteText) continue;
+        found++;
+        const yearly = cols[4] === '備註-每年';
+        if (!notes[date] || notes[date].text !== noteText || !!notes[date].yearly !== yearly) {
+          notes[date] = { text: noteText, yearly };
+          added++;
+        }
+        continue;
+      }
       if ((cols[4] || '').startsWith('假日')) {
         found++;
         const v = cols[4] === '假日-補班' ? 'work' : 'off';
@@ -1087,6 +1210,7 @@
     saveManual(manual);
     saveDayMarks(marks);
     saveComp(comp);
+    saveNotes(notes);
     render();
     toast(`匯入完成，新增 ${added} 筆`);
   });
