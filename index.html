@@ -85,6 +85,8 @@
   .row .time { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .row .extra { font-size: 12px; color: var(--muted); margin-left: 8px; }
   .row .time.late, .row .extra.late { color: var(--danger); }
+  .row .extra.hl, .cal-detail .hl { color: #b45309; font-weight: 600; }
+  @media (prefers-color-scheme: dark) { .row .extra.hl, .cal-detail .hl { color: #fcd34d; } }
   .link-btn {
     display: block; margin: 4px auto 0; border: none; background: none; color: var(--muted);
     font-size: 14px; text-decoration: underline; padding: 8px; cursor: pointer; font-family: inherit;
@@ -345,9 +347,10 @@
       <h3>上下班規則</h3>
       <label>幾點起算遲到（含）<input type="time" id="setLateTime" required></label>
       <label>每月幾次會收到通知<input type="number" id="setLateLimit" min="1" max="31" inputmode="numeric" required></label>
+      <label>幾點起要請時假（含）<input type="time" id="setHourLeaveTime" required></label>
       <label>每天工時（小時）<input type="number" id="setWorkHours" min="1" max="24" step="0.5" inputmode="decimal" required></label>
       <label>午休（分鐘）<input type="number" id="setLunchMins" min="0" max="180" step="5" inputmode="numeric" required></label>
-      <p class="hint">09:00 整就算遲到，08:59 以前準時；有請假的日子都不算遲到。<br>週六、週日與國定假日不算遲到、不計平均、不檢查工時（可在月曆點日期手動改放假／上班）。<br>最早下班＝上班時間＋工時＋午休。半天假那天只需一半工時，不扣午休。</p>
+      <p class="hint">09:00 整就算遲到，08:59 以前準時；有請假的日子都不算遲到。<br>09:30（含）以後到要請時假：09:30–10:29 請 1 小時、10:30–11:29 請 2 小時，依此類推；請時假不算遲到，工時少算請假的時數。<br>週六、週日與國定假日不算遲到、不計平均、不檢查工時（可在月曆點日期手動改放假／上班）。<br>最早下班＝上班時間＋工時＋午休。半天假那天只需一半工時，不扣午休。</p>
       <div class="dlg-actions">
         <button class="btn" value="cancel" formnovalidate>取消</button>
         <button class="btn primary" value="ok">儲存</button>
@@ -470,7 +473,7 @@
 
   // 遲到規則：lateTime（含）起算遲到，每月 lateLimit 次會收到公司通知
   const SETTINGS_KEY = 'punch-settings-v1';
-  const DEFAULT_SETTINGS = { lateTime: '09:00', lateLimit: 5, workHours: 8, lunchMins: 60 };
+  const DEFAULT_SETTINGS = { lateTime: '09:00', lateLimit: 5, workHours: 8, lunchMins: 60, hourLeaveTime: '09:30' };
   function loadSettings() {
     try {
       return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
@@ -479,8 +482,17 @@
   function saveSettings(cfg) {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(cfg));
   }
-  // 當天第一筆打卡在設定時間（含）之後算遲到；有請假（全天、上午、下午）的日子都不算
-  const isLateDay = (k, first, leaves, cfg) => !!first && !leaves[k] && !isOff(k) && hm(first) >= cfg.lateTime;
+  // 打卡在 hourLeaveTime（含）之後要請時假，每晚一小時多請一小時：09:30–10:29 → 1、10:30–11:29 → 2
+  // 已登記請假或放假日不另計
+  function hourLeave(k, first, leaves, cfg) {
+    if (!first || leaves[k] || isOff(k) || !cfg.hourLeaveTime) return 0;
+    const [h, m] = cfg.hourLeaveTime.split(':').map(Number);
+    const diff = first.getHours() * 60 + first.getMinutes() - (h * 60 + m);
+    return diff < 0 ? 0 : Math.floor(diff / 60) + 1;
+  }
+  // 當天第一筆打卡在設定時間（含）之後算遲到；有請假（全天、上午、下午、時假）的日子都不算
+  const isLateDay = (k, first, leaves, cfg) =>
+    !!first && !leaves[k] && !isOff(k) && hm(first) >= cfg.lateTime && !hourLeave(k, first, leaves, cfg);
   const monthLates = (days, leaves, cfg, ym) =>
     [...days.entries()].filter(([k, d]) => k.startsWith(ym) && isLateDay(k, d, leaves, cfg)).length;
 
@@ -495,14 +507,14 @@
   function saveOuts(obj) {
     localStorage.setItem(OUT_KEY, JSON.stringify(obj));
   }
-  // 當天應上班分鐘數與要扣的午休：半天假只需一半工時、不扣午休
-  function workRule(leaveType, cfg) {
+  // 當天應上班分鐘數與要扣的午休：半天假只需一半工時、不扣午休；時假每小時少做一小時
+  function workRule(leaveType, cfg, hrs = 0) {
     if (leaveType === 'off') return { work: 0, lunch: 0 };
     const half = leaveType === 'am' || leaveType === 'pm';
-    return { work: cfg.workHours * 60 / (half ? 2 : 1), lunch: half ? 0 : cfg.lunchMins };
+    return { work: Math.max(0, cfg.workHours * 60 / (half ? 2 : 1) - hrs * 60), lunch: half ? 0 : cfg.lunchMins };
   }
-  const earliestOff = (first, leaveType, cfg) => {
-    const r = workRule(leaveType, cfg);
+  const earliestOff = (first, leaveType, cfg, hrs = 0) => {
+    const r = workRule(leaveType, cfg, hrs);
     return new Date(first.getTime() + (r.work + r.lunch) * 60000);
   };
   const workedMins = (first, out, leaveType, cfg) =>
@@ -598,11 +610,13 @@
       if (todayOff) status += '（放假日・可補假）';
       if (todayLeave) status += `（${LEAVE_LABEL[todayLeave]}請假）`;
       if (isLateDay(todayKey, todayFirst, leaves, cfg)) status += '・遲到';
+      const todayHL = hourLeave(todayKey, todayFirst, leaves, cfg);
+      if (todayHL) status += `・請假 ${todayHL} 小時`;
       if (!todayOut) {
-        if (!todayOff) status += `\n最早可下班 ${hm(earliestOff(todayFirst, todayLeave, cfg))}`;
+        if (!todayOff) status += `\n最早可下班 ${hm(earliestOff(todayFirst, todayLeave, cfg, todayHL))}`;
       } else {
         const w = workedMins(todayFirst, todayOut, todayLT, cfg);
-        const short = workRule(todayLT, cfg).work - w;
+        const short = workRule(todayLT, cfg, todayHL).work - w;
         status += ` → 下班 ${hm(todayOut)}\n工時 ${dur(w)}${short > 0 ? `・不足 ${dur(short)}` : ' ✓'}`;
       }
     }
@@ -665,7 +679,7 @@
         let note = '', short = false;
         if (first) {
           const w = workedMins(first, d, lt(k, leaves), cfg);
-          const lack = workRule(lt(k, leaves), cfg).work - w;
+          const lack = workRule(lt(k, leaves), cfg, hourLeave(k, first, leaves, cfg)).work - w;
           short = lack > 0;
           note = short ? `不足 ${dur(lack)}` : `工時 ${dur(w)}`;
         }
@@ -689,6 +703,7 @@
         const k = dateKey(d);
         const isFirst = days.get(k).getTime() === d.getTime();
         const late = isFirst && isLateDay(k, d, leaves, cfg);
+        const hl = isFirst ? hourLeave(k, d, leaves, cfg) : 0;
         const note = [manual.has(item.punch) && '手動', !isFirst ? '重複' : isOff(k) ? '放假日・不計平均' : skipsAvg(leaves[k]) && '不計平均']
           .filter(Boolean).join('・');
         row.className = 'row';
@@ -696,6 +711,7 @@
           `<div class="date">${d.getMonth() + 1}/${d.getDate()}<span class="wd">週${WD[d.getDay()]}</span></div>` +
           `<div class="time${late ? ' late' : ''}"><span class="kind">上班</span>${hm(d)}</div>` +
           (late ? '<span class="extra late">遲到</span>' : '') +
+          (hl ? `<span class="extra hl">請假 ${hl}h</span>` : '') +
           (note ? `<span class="extra">${note}</span>` : '');
         onDelete = () => {
           if (!confirm(`確定刪除 ${k} ${hm(d)} 這筆紀錄？`)) return false;
@@ -780,7 +796,7 @@
       if (d.getDay() === 0 || d.getDay() === 6) cls.push('weekend');
       if (k > todayKey) cls.push('future');
       const off = isOff(k);
-      if (lv) cls.push('leave');
+      if (lv || hourLeave(k, first, leaves, cfg)) cls.push('leave');
       const wkend = d.getDay() === 0 || d.getDay() === 6;
       if (off) cls.push(wkend ? 'wkoff' : 'holiday');
       if (isLateDay(k, first, leaves, cfg)) cls.push('late');
@@ -804,6 +820,9 @@
     const workDays = [...days.keys()].filter((k) => k.startsWith(ym) && !isOff(k)).length;
     const parts = [`出勤 ${workDays} 天`, `遲到 ${monthLates(days, leaves, cfg, ym)} 次`];
     if (s.leaveDays) parts.push(`請假 ${s.leaveDays} 天`);
+    const hlSum = [...days.entries()].filter(([k]) => k.startsWith(ym))
+      .reduce((n, [k, f]) => n + hourLeave(k, f, leaves, cfg), 0);
+    if (hlSum) parts.push(`時假 ${hlSum} 小時`);
     if (s.avg != null) parts.push(`平均 ${minsToHM(s.avg)}`);
     $('calSum').textContent = parts.join('・');
 
@@ -819,12 +838,16 @@
     if (lv) lines.push(`請假：${LEAVE_LABEL[lv]}`);
     if (isOff(k)) lines.push('放假日・不計遲到與平均');
     else if (dayMarks[k] === 'work') lines.push('上班日（原為放假）');
-    if (first) lines.push(`上班 ${hm(first)}${isLateDay(k, first, leaves, cfg) ? '　<span class="late">遲到</span>' : ''}`);
+    const dayHL = hourLeave(k, first, leaves, cfg);
+    if (first) {
+      lines.push(`上班 ${hm(first)}${isLateDay(k, first, leaves, cfg) ? '　<span class="late">遲到</span>' : ''}` +
+        (dayHL ? `　<span class="hl">請假 ${dayHL} 小時</span>` : ''));
+    }
     if (out) {
       let line = `下班 ${hm(out)}`;
       if (first) {
         const w = workedMins(first, out, lt(k, leaves), cfg);
-        const lack = workRule(lt(k, leaves), cfg).work - w;
+        const lack = workRule(lt(k, leaves), cfg, dayHL).work - w;
         line += `・工時 ${dur(w)}${lack > 0 ? `　<span class="late">不足 ${dur(lack)}</span>` : ''}`;
       }
       lines.push(line);
@@ -955,7 +978,7 @@
     if (todayFirst) {
       const outs = loadOuts();
       if (outs[k] && !confirm(`今天 ${hm(new Date(outs[k]))} 已經下班打卡，要更新成現在的時間嗎？`)) return;
-      const need = earliestOff(todayFirst, lt(k, leaves), cfg);
+      const need = earliestOff(todayFirst, lt(k, leaves), cfg, hourLeave(k, todayFirst, leaves, cfg));
       if (now < need && !confirm(`還沒到最早下班時間 ${hm(need)}（還差 ${dur(Math.ceil((need - now) / 60000))}），確定要下班打卡嗎？`)) return;
       const m = loadManual();
       if (outs[k] && m.delete(outs[k])) saveManual(m);
@@ -976,7 +999,10 @@
     save(records);
     if (navigator.vibrate) navigator.vibrate(60);
     render();
-    if (isLateDay(k, now, leaves, cfg)) {
+    const hl = hourLeave(k, now, leaves, cfg);
+    if (hl) {
+      toast(`打卡成功 ${hm(now)}・需請假 ${hl} 小時`);
+    } else if (isLateDay(k, now, leaves, cfg)) {
       const n = monthLates(firstPerDay(records), leaves, cfg, k.slice(0, 7));
       toast(`打卡成功 ${hm(now)}・遲到（本月第 ${n} 次）`);
     } else {
@@ -992,6 +1018,7 @@
     $('setLateLimit').value = cfg.lateLimit;
     $('setWorkHours').value = cfg.workHours;
     $('setLunchMins').value = cfg.lunchMins;
+    $('setHourLeaveTime').value = cfg.hourLeaveTime;
     sdlg.showModal();
   });
   sdlg.addEventListener('close', () => {
@@ -1000,8 +1027,9 @@
     const lateLimit = parseInt($('setLateLimit').value, 10);
     const workHours = parseFloat($('setWorkHours').value);
     const lunchMins = parseInt($('setLunchMins').value, 10);
-    if (!lateTime || !(lateLimit > 0) || !(workHours > 0) || !(lunchMins >= 0)) return;
-    saveSettings({ lateTime, lateLimit, workHours, lunchMins });
+    const hourLeaveTime = $('setHourLeaveTime').value;
+    if (!lateTime || !hourLeaveTime || !(lateLimit > 0) || !(workHours > 0) || !(lunchMins >= 0)) return;
+    saveSettings({ lateTime, lateLimit, workHours, lunchMins, hourLeaveTime });
     render();
     toast('已儲存上下班規則');
   });
