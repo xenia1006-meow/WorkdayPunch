@@ -230,6 +230,10 @@
   .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
   dialog label + label { display: block; margin-top: 12px; }
   dialog .seg label + label { margin-top: 0; }
+  .time-range { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  dialog .time-range label + label { margin-top: 0; }
+  .time-range[hidden] { display: none; }
+  #leaveDur { margin: 6px 0 4px; }
   .chk { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; font-size: 15px; }
   .chk input { width: 18px; height: 18px; }
 </style>
@@ -277,9 +281,11 @@
         <label><input type="radio" name="lt" value="pm"><span>下午</span></label>
         <label><input type="radio" name="lt" value="h"><span>小時</span></label>
       </div>
-      <div id="leaveHoursRow" hidden>
-        <label>請假時數<input type="number" id="leaveHours" min="1" max="7" step="1" value="1" inputmode="numeric"></label>
+      <div id="leaveHoursRow" class="time-range" hidden>
+        <label>從<input type="time" id="leaveFrom" value="09:00" step="1800"></label>
+        <label>到<input type="time" id="leaveTo" value="10:00" step="1800"></label>
       </div>
+      <div class="hint" id="leaveDur"></div>
       <label class="chk"><input type="checkbox" id="leaveComp">使用補假（抵假日打卡的天數）</label>
       <p class="hint">請假的日子都不算遲到。全天或上午請假不列入平均到達時間。<br>以小時請假時，當天工時少算請假的時數。<br>同一天重複登記會覆蓋原本的假別。</p>
       <div class="dlg-actions">
@@ -397,13 +403,25 @@
     localStorage.setItem(KEY, JSON.stringify(arr));
   }
 
-  // 請假紀錄：{ 'YYYY-MM-DD': 'full' | 'am' | 'pm' }
+  // 請假紀錄：{ 'YYYY-MM-DD': 'full' | 'am' | 'pm' | 'h09:00~10:00' }
   const LEAVE_KEY = 'punch-leaves-v1';
   const LEAVE_LABEL = { full: '全天', am: '上午', pm: '下午' };
-  // 以小時請假存成 'h1'、'h2'…
-  const leaveHours = (t) => (typeof t === 'string' && t[0] === 'h' ? Number(t.slice(1)) || 0 : 0);
-  const leaveLabel = (t) => (leaveHours(t) ? `${leaveHours(t)} 小時` : LEAVE_LABEL[t]);
-  const leaveText = (t) => (leaveHours(t) ? `請假 ${leaveHours(t)} 小時` : `${LEAVE_LABEL[t]}請假`);
+  // 以小時請假存成起訖時間 'h09:00~10:00'；舊版只存時數 'h1'、'h2' 也照樣認得
+  const toMins = (s) => { const [h, m] = s.split(':').map(Number); return h * 60 + m; };
+  const leaveRange = (t) => {
+    const m = typeof t === 'string' && /^h(\d\d:\d\d)~(\d\d:\d\d)$/.exec(t);
+    return m ? [m[1], m[2]] : null;
+  };
+  const leaveHours = (t) => {
+    const r = leaveRange(t);
+    if (r) return Math.max(0, toMins(r[1]) - toMins(r[0])) / 60;
+    return typeof t === 'string' && t[0] === 'h' ? Number(t.slice(1)) || 0 : 0;
+  };
+  const leaveLabel = (t) => {
+    const r = leaveRange(t);
+    return r ? `${r[0]}～${r[1]}` : leaveHours(t) ? `${leaveHours(t)} 小時` : LEAVE_LABEL[t];
+  };
+  const leaveText = (t) => (leaveHours(t) ? `請假 ${leaveLabel(t)}` : `${LEAVE_LABEL[t]}請假`);
   const leaveDayValue = (t) => (t === 'full' ? 1 : t === 'am' || t === 'pm' ? 0.5 : 0);
   function loadLeaves() {
     try {
@@ -1109,14 +1127,26 @@
 
   // 請假登記
   const dlg = $('leaveDlg');
-  const showHoursRow = () => { $('leaveHoursRow').hidden = dlg.querySelector('input[name=lt]:checked').value !== 'h'; };
+  const leaveRangeMins = () => toMins($('leaveTo').value || '00:00') - toMins($('leaveFrom').value || '00:00');
+  const showHoursRow = () => {
+    const hourly = dlg.querySelector('input[name=lt]:checked').value === 'h';
+    $('leaveHoursRow').hidden = !hourly;
+    const m = leaveRangeMins();
+    $('leaveDur').textContent = !hourly ? '' : m > 0 ? `共 ${m / 60} 小時` : '結束時間要晚於開始時間';
+  };
+  const fromMins = (m) => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
   const setType = (t) => {
     const hrs = leaveHours(t);
     dlg.querySelector(`input[name=lt][value=${hrs ? 'h' : t}]`).checked = true;
-    $('leaveHours').value = hrs || 1;
+    // 舊版只存時數的，帶成從 09:00 開始
+    const r = leaveRange(t) || ['09:00', fromMins(9 * 60 + (hrs || 1) * 60)];
+    $('leaveFrom').value = r[0];
+    $('leaveTo').value = r[1];
     showHoursRow();
   };
   dlg.querySelectorAll('input[name=lt]').forEach((r) => r.addEventListener('change', showHoursRow));
+  $('leaveFrom').addEventListener('change', showHoursRow);
+  $('leaveTo').addEventListener('change', showHoursRow);
   const setComp = (k) => { $('leaveComp').checked = !!loadComp()[k]; };
   $('leaveDate').addEventListener('change', (e) => { setType(loadLeaves()[e.target.value] || 'full'); setComp(e.target.value); });
   function openLeave(k) {
@@ -1132,9 +1162,10 @@
     let t = dlg.querySelector('input[name=lt]:checked').value;
     if (!k) return;
     if (t === 'h') {
-      const hrs = parseInt($('leaveHours').value, 10);
-      if (!(hrs >= 1 && hrs <= 7)) { toast('請假時數請填 1～7 小時'); return; }
-      t = 'h' + hrs;
+      const m = leaveRangeMins();
+      if (!$('leaveFrom').value || !$('leaveTo').value || m <= 0) { toast('請假的結束時間要晚於開始時間'); return; }
+      if (m > 7 * 60) { toast('超過 7 小時請改選全天'); return; }
+      t = `h${$('leaveFrom').value}~${$('leaveTo').value}`;
     }
     const leaves = loadLeaves();
     leaves[k] = t;
@@ -1237,8 +1268,10 @@
         continue;
       }
       const leavePart = (cols[4] || '').startsWith('請假') ? cols[4].split('-')[1] || '' : '';
-      const hourMatch = /^(\d+) 小時$/.exec(leavePart);
-      const leaveType = leavePart && (LABEL_TO_TYPE[leavePart] || (hourMatch && 'h' + hourMatch[1]));
+      const hourMatch = /^(\d+(?:\.\d+)?) 小時$/.exec(leavePart);
+      const rangeMatch = /^(\d\d:\d\d)～(\d\d:\d\d)$/.exec(leavePart);
+      const leaveType = leavePart && (LABEL_TO_TYPE[leavePart] ||
+        (rangeMatch && `h${rangeMatch[1]}~${rangeMatch[2]}`) || (hourMatch && 'h' + hourMatch[1]));
       if (leaveType) {
         found++;
         if (leaves[date] !== leaveType) { leaves[date] = leaveType; added++; }
